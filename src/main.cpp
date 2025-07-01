@@ -6,11 +6,10 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include "temperature.h" 
+#include "touch_button.h"
 
 int servoPort = 5;
-int buttonPort1 = 4;
-int buttonPort2 = 1;
-int buttonPort3 = 2;
+
 int relay = 17;
 int buzzer = 14;
 
@@ -20,8 +19,7 @@ int damper = 0;
 
 Servo mansServo;
 
-#define TOUCH_THRESHOLD 30000
-#define TOUCH_DEBOUNCE_MS 75
+
 
 void setup() {
     Serial.begin(115200);
@@ -34,6 +32,8 @@ void setup() {
     startDamperControlTask();
 
     initTemperatureSensor();
+
+    touchButtonInit(buttonPort1, TOUCH_THRESHOLD, TOUCH_DEBOUNCE_MS);
 
     Serial.println("Sistēma gatava lietošanai!");
 }
@@ -53,24 +53,7 @@ void loop() {
     lvgl_display_update_bars(temperature, targetTempC);
     lvgl_display_update_damper(damper);
 
-    static unsigned long lastTouchTime = 0;
-    static bool lastTouch = false;
-
-    int touchValue = touchRead(buttonPort1);
-
-    if (touchValue > TOUCH_THRESHOLD && !lastTouch) {
-        unsigned long now = millis();
-        if (now - lastTouchTime > TOUCH_DEBOUNCE_MS) {
-            targetTempC += 1.0;
-            if (targetTempC > 90) targetTempC = 40;
-            lvgl_display_update_target_temp();
-            lastTouchTime = now;
-        }
-        lastTouch = true;
-    }
-    if (touchValue < TOUCH_THRESHOLD) {
-        lastTouch = false;
-    }
+    touchButtonHandle(targetTempC, 40, 90, 1.0);
 
     lv_tick_inc(5);
     delay(5);
