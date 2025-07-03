@@ -6,7 +6,6 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include "temperature.h" 
-#include "touch_button.h"
 
 int servoPort = 5;
 
