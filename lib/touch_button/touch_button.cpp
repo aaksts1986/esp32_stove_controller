@@ -1,5 +1,8 @@
 #include "touch_button.h"
 #include <Arduino.h>
+#include "lvgl_display.h"
+#include "damper_control.h"
+#include "temperature.h"
 
 int buttonPort1 = 4;
 int buttonPort2 = 1;
@@ -33,9 +36,10 @@ bool touchButtonPressed() {
     return false;
 }
 
-void touchButtonHandle(int &targetTempC, int minTemp, int maxTemp, int step) {
+void touchButtonHandle() {
     if (touchButtonPressed()) {
-        targetTempC += step;
-        if (targetTempC > maxTemp) targetTempC = minTemp;
+        targetTempC += 1;
+        if (targetTempC > maxTemp) targetTempC = temperatureMin;
+        lvgl_display_update_target_temp();
     }
 }

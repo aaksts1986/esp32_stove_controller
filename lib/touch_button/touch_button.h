@@ -9,4 +9,4 @@ extern int buttonPort3;
 
 void touchButtonInit(int pin, int threshold, int debounceMs);
 bool touchButtonPressed();
-void touchButtonHandle(int &targetTempC, int minTemp, int maxTemp, int step);
+void touchButtonHandle();

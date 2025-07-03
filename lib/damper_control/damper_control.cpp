@@ -3,32 +3,32 @@
 #include <ESP32Servo.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include "temperature.h" 
 
-extern Servo mansServo; // Pieejams no main.cpp
-extern int servoPort;
-extern int targetTempC;
-extern int temperature;
-extern int damper;
+Servo mansServo; // Pieejams no main.cpp
+
+int damper = 0;
 TaskHandle_t damperTaskHandle = NULL;
-
+int servoPort = 5;
+int endTrigger = 100000;
+int minDamper = 0;
 // --- Parametri un mainīgie ---
-namespace {
-    const int minDamper = 0;
-    const int maxDamper = 100;
-    const int zeroDamper = 0;
-    const int endTrigger = 100000;
-    const int refillTrigger = 80000; // vai cita piemērota vērtība
-    const int temperatureMin = 30;
-    const int kP = 15;            // Overall gain coefficient and P coefficient of the PID regulation
-    const float tauI = 1000;         // Integral time constant (sec/repeat)
-    const float tauD = 5;            // Derivative time constant (sec/reapeat)
-    const float kI =  kP/tauI;        // I coefficient of the PID regulation
-    const float kD = kP/tauD;  
+
+
+    int maxDamper = 100;
+    int zeroDamper = 0;
+
+    int refillTrigger = 80000; // vai cita piemērota vērtība
+    int kP = 15;            // Overall gain coefficient and P coefficient of the PID regulation
+    float tauI = 1000;         // Integral time constant (sec/repeat)
+    float tauD = 5;            // Derivative time constant (sec/reapeat)
+    float kI =  kP/tauI;        // I coefficient of the PID regulation
+    float kD = kP/tauD;  
     int oldDamper = 0;
-    const int servoAngle = 35;
-    const int maxDamperx = 100;
-    const float servoCalibration = 1.5;
-    const int servoOffset = 29;      // D coefficient of the PID regulation
+    int servoAngle = 35;
+    int maxDamperx = 100;
+    float servoCalibration = 1.5;
+    int servoOffset = 29;      // D coefficient of the PID regulation
 
     int TempHist[10] = {0};
     float errP = 0;
@@ -39,7 +39,7 @@ namespace {
     int maxUs = 2500;   // servo maksimālais impulsa platums
     int minAngle = 0;   // parasti 0
     int maxAngle = 180; // parasti 180
-}
+
 
 void damperControlInit() {
     mansServo.attach(servoPort);
@@ -73,7 +73,7 @@ bool WoodFilled(int CurrentTemp) {
     return false;
 }
 
-void damperControlLoop(float targetTempC, float temperature, int &damper) {
+void damperControlLoop() {
     if (errI < endTrigger) {
         errP = targetTempC - temperature;
         errI = errI + errP;
@@ -108,7 +108,7 @@ void damperControlLoop(float targetTempC, float temperature, int &damper) {
 
 
 
-void moveServoToDamper(int damper) {
+void moveServoToDamper() {
     int diff = damper - oldDamper;
     if (abs(diff) > 8) {
         mansServo.attach(servoPort);
@@ -136,8 +136,8 @@ void moveServoToDamper(int damper) {
 
 void DamperTask(void *pvParameters) {
     while (1) {
-        damperControlLoop(targetTempC, temperature, damper);
-        moveServoToDamper(damper);
+        damperControlLoop();
+        moveServoToDamper();
         vTaskDelay(pdMS_TO_TICKS(100));
     }
 }

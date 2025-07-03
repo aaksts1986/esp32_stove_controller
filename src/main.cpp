@@ -6,18 +6,11 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include "temperature.h" 
+#include "touch_button.h"
 
-int servoPort = 5;
 
 int relay = 17;
 int buzzer = 14;
-
-TFT_eSPI tft = TFT_eSPI();
-
-int damper = 0;
-
-Servo mansServo;
-
 
 
 void setup() {
@@ -49,10 +42,10 @@ void loop() {
     updateTemperature(); // <-- pievieno šo
 
 
-    lvgl_display_update_bars(temperature, targetTempC);
-    lvgl_display_update_damper(damper);
+    lvgl_display_update_bars();
+    lvgl_display_update_damper();
 
-    touchButtonHandle(targetTempC, 40, 90, 1.0);
+    touchButtonHandle();
 
     lv_tick_inc(5);
     delay(5);

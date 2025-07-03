@@ -1,4 +1,6 @@
 #include "lvgl_display.h"
+#include "temperature.h"
+#include "damper_control.h"
 
 // LVGL un TFT mainīgie
 #define CAL_X_MIN 210
@@ -9,7 +11,7 @@
 
 #define ALPHA 0.3f  // 0 = stingrs filtrs, 1 = bez filtra
 
-extern TFT_eSPI tft;
+TFT_eSPI tft = TFT_eSPI();
 static lv_disp_draw_buf_t draw_buf;
 static lv_color_t buf1[TFT_WIDTH * (TFT_HEIGHT/10)];
 static lv_color_t buf2[TFT_WIDTH * (TFT_HEIGHT/10)];
@@ -24,7 +26,7 @@ lv_obj_t *red_bar;
 lv_obj_t *raw_touch_point = NULL;  // Zaļais punkts (nefiltrētais)
 static lv_obj_t *temp_label = NULL;
 static lv_obj_t *damper_label = NULL;
-static lv_obj_t *target_temp_label = NULL; // Jauns mērķa temperatūras teksts
+static lv_obj_t *target_temp_label = NULL; // Jauns mērķa temperatūras tekstsv
 extern int targetTempC;
 
 // Funkcijas prototips
@@ -99,13 +101,13 @@ void lvgl_display_touch_update() {
     }
 }
 
-void lvgl_display_update_bars(int temp, int targetTempC) {
+void lvgl_display_update_bars() {
     lv_bar_set_range(blue_bar, 5, targetTempC);
-    lv_bar_set_value(blue_bar, (temp > targetTempC / 2.5) ? (targetTempC / 2.43) : temp, LV_ANIM_OFF);
+    lv_bar_set_value(blue_bar, (temperature > targetTempC / 2.5) ? (targetTempC / 2.43) : temperature, LV_ANIM_OFF);
 
-    if(temp > 30) {
+    if(temperature > 30) {
         lv_bar_set_range(red_bar, targetTempC / 2.5, targetTempC + 3);
-        lv_bar_set_value(red_bar, temp, LV_ANIM_OFF);
+        lv_bar_set_value(red_bar, temperature, LV_ANIM_OFF);
         lv_obj_clear_flag(red_bar, LV_OBJ_FLAG_HIDDEN);
     } else {
         lv_obj_add_flag(red_bar, LV_OBJ_FLAG_HIDDEN);
@@ -114,7 +116,7 @@ void lvgl_display_update_bars(int temp, int targetTempC) {
     // Atjauno temperatūras tekstu
     if(temp_label) {
         static char buf[32];
-        snprintf(buf, sizeof(buf), "Temp: %d°C", temp);
+        snprintf(buf, sizeof(buf), "Temp: %d°C", temperature);
         lv_label_set_text(temp_label, buf);
     }
 }
@@ -228,7 +230,7 @@ void lvgl_display_show_touch_point(uint16_t x, uint16_t y, bool show) {
     }
 }
 
-void lvgl_display_update_damper(int damper) {
+void lvgl_display_update_damper() {
     if(damper_label) {
         static char buf[32];
         snprintf(buf, sizeof(buf), "Damper: %d", damper);
