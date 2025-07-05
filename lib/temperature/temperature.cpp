@@ -3,7 +3,7 @@
 #include <DallasTemperature.h>
 
 int temperature = 0;
-int targetTempC = 40;
+int targetTempC = 31;
 int maxTemp = 80; // Maximum temperature for the target
 int temperatureMin = 30; // Minimum temperature to avoid negative values
 static OneWire oneWire(6);
@@ -30,7 +30,7 @@ void updateTemperature() {
     if (tempRequested && millis() - tempRequestTime >= 100) {
         temperature = ds.getTempC(sensor1);
         if (temperature< 0) {
-            temperature = 10; // Avoid negative temperatures
+            temperature = 5; // Avoid negative temperatures
         }
         lastTempRead = millis();
         tempRequested = false;

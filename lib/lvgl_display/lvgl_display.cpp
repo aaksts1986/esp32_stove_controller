@@ -25,12 +25,15 @@ lv_obj_t *blue_bar;
 lv_obj_t *red_bar;
 lv_obj_t *raw_touch_point = NULL;  // Zaļais punkts (nefiltrētais)
 static lv_obj_t *temp_label = NULL;
+static lv_obj_t *temp0 = NULL;
 static lv_obj_t *damper_label = NULL;
 static lv_obj_t *target_temp_label = NULL; // Jauns mērķa temperatūras tekstsv
+
 extern int targetTempC;
 
 // Funkcijas prototips
 void lvgl_display_show_touch_point(uint16_t x, uint16_t y, bool show);
+LV_FONT_DECLARE(ekstra);
 
 // Displeja flush funkcija
 void mans_disp_flush(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *color_p) {
@@ -102,11 +105,12 @@ void lvgl_display_touch_update() {
 }
 
 void lvgl_display_update_bars() {
-    lv_bar_set_range(blue_bar, 5, targetTempC);
-    lv_bar_set_value(blue_bar, (temperature > targetTempC / 2.5) ? (targetTempC / 2.43) : temperature, LV_ANIM_OFF);
 
-    if(temperature > 30) {
-        lv_bar_set_range(red_bar, targetTempC / 2.5, targetTempC + 3);
+    lv_bar_set_range(blue_bar, 0, targetTempC);
+    lv_bar_set_value(blue_bar, (temperature > targetTempC / 3) ? (targetTempC / 3) : temperature, LV_ANIM_OFF);
+
+    if(temperature > targetTempC / 3) {
+        lv_bar_set_range(red_bar, targetTempC / 3, targetTempC + 3);
         lv_bar_set_value(red_bar, temperature, LV_ANIM_OFF);
         lv_obj_clear_flag(red_bar, LV_OBJ_FLAG_HIDDEN);
     } else {
@@ -116,7 +120,7 @@ void lvgl_display_update_bars() {
     // Atjauno temperatūras tekstu
     if(temp_label) {
         static char buf[32];
-        snprintf(buf, sizeof(buf), "Temp: %d°C", temperature);
+        snprintf(buf, sizeof(buf), "%d", temperature);
         lv_label_set_text(temp_label, buf);
     }
 }
@@ -145,15 +149,15 @@ void lvgl_display_init() {
 
     lv_obj_set_style_bg_color(lv_scr_act(), lv_color_hex(0xF3F4F3), 0);
 
-    lv_obj_t * rect = lv_obj_create(lv_scr_act());
+  /*   lv_obj_t * rect = lv_obj_create(lv_scr_act());
     lv_obj_set_size(rect, 300, 400);
     lv_obj_align(rect, LV_ALIGN_TOP_MID, 0, 15);
     lv_obj_set_style_radius(rect, 20, 0);
     lv_obj_set_style_bg_color(rect, lv_color_hex(0xfcfdfd), 0);
     lv_obj_set_style_border_color(rect, lv_color_hex(0x000000), 0);
-    lv_obj_set_style_border_width(rect, 2, 0);
+    lv_obj_set_style_border_width(rect, 2, 0); */
 
-    // Melna vertikāla līnija pa vidu
+/*     // Melna vertikāla līnija pa vidu
     static lv_point_t line_points[] = { {150, 0}, {150, 400} }; // 150 ir puse no 300 (rect platums)
     lv_obj_t * line = lv_line_create(lv_scr_act());
     lv_line_set_points(line, line_points, 2);
@@ -161,19 +165,19 @@ void lvgl_display_init() {
     //lv_obj_set_pos(line, (tft.width() - 300)/2, tft.height() - 400 -30); // rect kreisais augšējais stūris
     lv_obj_set_style_line_width(line, 3, 0);
     lv_obj_set_style_line_color(line, lv_color_hex(0x000000), 0);
-
+ */
     blue_bar = lv_bar_create(lv_scr_act());
-    lv_obj_set_size(blue_bar, 80, 300);
-    lv_obj_set_pos(blue_bar, 40, 40);
+    lv_obj_set_size(blue_bar, 110, 350);
+    lv_obj_set_pos(blue_bar, 70, 40);
     //lv_bar_set_range(blue_bar, 5, targetTempC);
-    lv_obj_set_style_radius(blue_bar, 40, LV_PART_MAIN);
+    lv_obj_set_style_radius(blue_bar, 55, LV_PART_MAIN);
     lv_obj_set_style_clip_corner(blue_bar, true, LV_PART_MAIN);
     lv_obj_set_style_bg_color(blue_bar, lv_color_hex(0x7DD0F2), LV_PART_INDICATOR);
     lv_obj_set_style_radius(blue_bar, 0, LV_PART_INDICATOR);
 
     red_bar = lv_bar_create(lv_scr_act());
-    lv_obj_set_size(red_bar, 80, 175);
-    lv_obj_align(red_bar, LV_ALIGN_LEFT_MID, 40, -80);
+    lv_obj_set_size(red_bar, 110, 200);
+    lv_obj_align(red_bar, LV_ALIGN_LEFT_MID, 70, -50);
     //lv_bar_set_range(red_bar, 30, targetTempC+3);
     lv_obj_set_style_bg_opa(red_bar, LV_OPA_COVER, LV_PART_INDICATOR);
     lv_obj_set_style_bg_color(red_bar, lv_color_hex(0xFFC0C0), LV_PART_INDICATOR);
@@ -186,9 +190,9 @@ void lvgl_display_init() {
     lv_obj_add_flag(red_bar, LV_OBJ_FLAG_HIDDEN);
 
     lv_obj_t * circle = lv_obj_create(lv_scr_act());
-    lv_obj_set_size(circle, 120, 120);
-    lv_obj_set_pos(circle, 20, 480 - 200);
-    lv_obj_set_style_radius(circle, 60, 0);
+    lv_obj_set_size(circle, 150, 150);
+    lv_obj_set_pos(circle, 50, 520 - 200);
+    lv_obj_set_style_radius(circle, 75, 0);
     lv_obj_set_style_bg_color(circle, lv_color_hex(0x7DD0F2), 0);
     lv_obj_set_style_border_width(circle, 0, 0);
 
@@ -202,9 +206,18 @@ void lvgl_display_init() {
 
     // Temperatūras label (augšā, piemēram, y = 30)
     temp_label = lv_label_create(lv_scr_act());
-    lv_obj_set_style_text_font(temp_label, &lv_font_montserrat_28, 0);
-    lv_obj_align(temp_label, LV_ALIGN_TOP_RIGHT, -30, 30); // Novieto augšējā labajā stūrī
-    lv_label_set_text(temp_label, "Temp: --°C");
+    lv_obj_set_style_text_font(temp_label, &ekstra, 0);
+    lv_obj_set_style_text_color(temp_label, lv_color_hex(0xF3F4F3), 0);
+    lv_obj_set_pos(temp_label, 75, 360); // Novieto augšējā labajā stūrī
+    lv_label_set_text(temp_label, "--");
+
+     temp0 = lv_label_create(lv_scr_act());
+    lv_obj_set_style_text_font(temp0, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(temp0, lv_color_hex(0xF3F4F3), 0);
+    lv_obj_set_style_bg_color(temp0, lv_color_hex(0xF3F4F3), 0);
+    lv_obj_set_pos(temp0, 170, 360);
+    lv_label_set_text(temp0, "°C"); 
+
 
     // Damper label (zem temperatūras, piemēram, y = 70)
     damper_label = lv_label_create(lv_scr_act());
