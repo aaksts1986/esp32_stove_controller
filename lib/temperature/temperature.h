@@ -3,6 +3,11 @@
 
 void initTemperatureSensor();
 void updateTemperature();
+
+// Change detection functions
+bool hasTemperatureChanged();
+unsigned long getTimeSinceLastTempChange();
+
 extern int temperature;
 extern int targetTempC;
 extern int temperatureMin;

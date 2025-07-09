@@ -6,6 +6,7 @@
 extern int buttonPort1;
 extern int buttonPort2;
 extern int buttonPort3;
+extern int thresholds;
 
 void touchButtonInit(int pin, int threshold, int debounceMs);
 bool touchButtonPressed();

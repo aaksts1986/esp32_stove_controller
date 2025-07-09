@@ -4,13 +4,20 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include "temperature.h" 
+#include "touch_button.h"
+#include "display_manager.h"  // Add for change notifications
+
+
+
 
 Servo mansServo; // Pieejams no main.cpp
+
+String messageDamp;
 
 int damper = 0;
 TaskHandle_t damperTaskHandle = NULL;
 int servoPort = 5;
-int endTrigger = 100000;
+float refillTrigger = 500;
 int minDamper = 0;
 // --- Parametri un mainīgie ---
 
@@ -18,7 +25,7 @@ int minDamper = 0;
     int maxDamper = 100;
     int zeroDamper = 0;
 
-    int refillTrigger = 80000; // vai cita piemērota vērtība
+    float endTrigger = 1000; // vai cita piemērota vērtība
     int kP = 15;            // Overall gain coefficient and P coefficient of the PID regulation
     float tauI = 1000;         // Integral time constant (sec/repeat)
     float tauD = 5;            // Derivative time constant (sec/reapeat)
@@ -73,6 +80,20 @@ bool WoodFilled(int CurrentTemp) {
     return false;
 }
 
+void ieietDeepSleepArTouch() {
+    Serial.println("Sagatavošanās deep sleep...");
+
+
+
+    // Aktivē touch wakeup
+    touchSleepWakeUpEnable (2, thresholds);
+
+    Serial.println("Ej Deep Sleep... pieskaries, lai pamodinātu.");
+    delay(500);
+
+    esp_deep_sleep_start();
+}
+
 void damperControlLoop() {
     if (errI < endTrigger) {
         errP = targetTempC - temperature;
@@ -87,17 +108,60 @@ void damperControlLoop() {
 
         int wood = sum_recent / 5;
         int wood2 = sum_old / 5;
-        //Serial.printf("Malka: %d, Vecā malka: %d\n", wood, wood2);
-        if (wood >= wood2) {
+        Serial.print("/erri:" + String(errI) +" |  " + "p:" + String(errP) + " |  " + "o:" + String(wood) + " |  " + "p2:" + String(wood2) + " |  " + "d:" + String(errD) + " |  " + "t:" + String(temperature) + "\n");
+        if (wood > wood2) {
             errI = 0;
-            
         }
+        int oldDamperValue = damper;  // Save old value before calculation
         damper = kP * errP + kI * errI + kD * errD;
         if (damper < minDamper) damper = minDamper;
         if (damper > maxDamper) damper = maxDamper;
+        
+        // Notify display if damper value changed (even small changes)
+        if (damper != oldDamperValue) {
+            display_manager_notify_damper_position_changed();
+            Serial.printf("Damper value changed: %d -> %d\n", oldDamperValue, damper);
+        }
+        
+       // Serial.printf("Malka: %d", errI);
+        //Refill Alarm
+        String oldMessage = messageDamp;
+        if (errI > refillTrigger) { 
+            messageDamp = "FILL!";  
+        } else {
+            messageDamp = "AUTO";
+        }
+        
+        // Notify display if message changed
+        if (messageDamp != oldMessage) {
+            display_manager_notify_damper_changed();  // Only status update
+            Serial.printf("Damper status changed: %s -> %s\n", oldMessage.c_str(), messageDamp.c_str());
+        }
+
     } else {
         if (temperature < temperatureMin) {
+            int oldDamperValue = damper;
             damper = zeroDamper;
+            
+            // Notify if damper value changed
+            if (damper != oldDamperValue) {
+                display_manager_notify_damper_position_changed();
+                Serial.printf("Damper value changed (END): %d -> %d\n", oldDamperValue, damper);
+            }
+            
+            String oldMessage = messageDamp;
+            messageDamp = "END!";
+            
+            // Notify display if message changed
+            if (messageDamp != oldMessage) {
+                display_manager_notify_damper_changed();  // Only status update
+                Serial.printf("Damper status changed: %s -> %s\n", oldMessage.c_str(), messageDamp.c_str());
+            }
+            
+            delay(500);
+            ieietDeepSleepArTouch();
+
+
         }
     }
 
@@ -129,6 +193,10 @@ void moveServoToDamper() {
         }
         mansServo.detach();
         oldDamper = damper;
+        
+        // Notify display manager that damper position changed
+        display_manager_notify_damper_position_changed();  // Position update
+        Serial.printf("Damper moved: %d -> %d (diff: %d)\n", oldDamper, damper, diff);
     }
 }
 
@@ -136,7 +204,6 @@ void moveServoToDamper() {
 
 void DamperTask(void *pvParameters) {
     while (1) {
-        damperControlLoop();
         moveServoToDamper();
         vTaskDelay(pdMS_TO_TICKS(100));
     }
@@ -153,3 +220,4 @@ void startDamperControlTask() {
         1
     );
 }
+

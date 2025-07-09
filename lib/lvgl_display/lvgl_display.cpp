@@ -1,8 +1,12 @@
 #include "lvgl_display.h"
+#include <TFT_eSPI.h>  // Include TFT_eSPI here instead of in header
 #include "temperature.h"
 #include "damper_control.h"
+#include "wifi1.h"
+#include "lvgl.h"
+#include "display_config.h"  // For buffer size configuration
 
-// LVGL un TFT mainīgie
+// LVGL un TFT mainīgie - OPTIMIZED BUFFER SIZE
 #define CAL_X_MIN 210
 #define CAL_X_MAX 3850
 #define CAL_Y_MIN 250
@@ -11,10 +15,30 @@
 
 #define ALPHA 0.3f  // 0 = stingrs filtrs, 1 = bez filtra
 
+// Buffer optimization: Use configurable buffer size based on display mode and PSRAM
+// PSRAM available: Use 3x larger buffers for better performance 
+// PURE_EVENT = 1/5 (3x larger), POWER_SAVE = 1/7, others = 1/3 when PSRAM available
+// Without PSRAM: Standard sizes (1/15, 1/20, 1/10)
+
+#ifndef PSRAM_LVGL_BUFFER_FRACTION
+    #define PSRAM_LVGL_BUFFER_FRACTION 10  // Default fallback
+#endif
+
 TFT_eSPI tft = TFT_eSPI();
 static lv_disp_draw_buf_t draw_buf;
-static lv_color_t buf1[TFT_WIDTH * (TFT_HEIGHT/10)];
-static lv_color_t buf2[TFT_WIDTH * (TFT_HEIGHT/10)];
+
+// Conditional buffer allocation: PSRAM vs internal RAM
+#ifdef BOARD_HAS_PSRAM
+    // Use PSRAM for large buffers when available
+    DRAM_ATTR static lv_color_t *buf1 = nullptr;
+    DRAM_ATTR static lv_color_t *buf2 = nullptr;
+    #define BUFFER_SIZE (TFT_WIDTH * (TFT_HEIGHT/PSRAM_LVGL_BUFFER_FRACTION))
+#else
+    // Use internal RAM for smaller buffers
+    static lv_color_t buf1[TFT_WIDTH * (TFT_HEIGHT/PSRAM_LVGL_BUFFER_FRACTION)];
+    static lv_color_t buf2[TFT_WIDTH * (TFT_HEIGHT/PSRAM_LVGL_BUFFER_FRACTION)];
+    #define BUFFER_SIZE (TFT_WIDTH * (TFT_HEIGHT/PSRAM_LVGL_BUFFER_FRACTION))
+#endif
 
 uint16_t last_x = 0, last_y = 0;
 bool last_touched = false;
@@ -28,12 +52,17 @@ static lv_obj_t *temp_label = NULL;
 static lv_obj_t *temp0 = NULL;
 static lv_obj_t *damper_label = NULL;
 static lv_obj_t *target_temp_label = NULL; // Jauns mērķa temperatūras tekstsv
+static lv_obj_t *target = NULL;
+static lv_obj_t *damper_status_label = NULL; // Jauns label mainīgais
+static lv_obj_t *time_label = NULL;
 
 extern int targetTempC;
 
 // Funkcijas prototips
 void lvgl_display_show_touch_point(uint16_t x, uint16_t y, bool show);
 LV_FONT_DECLARE(ekstra);
+LV_FONT_DECLARE(ekstra1);
+LV_FONT_DECLARE(eeet);
 
 // Displeja flush funkcija
 void mans_disp_flush(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *color_p) {
@@ -125,13 +154,32 @@ void lvgl_display_update_bars() {
     }
 }
 
+
+
 void lvgl_display_init() {
     tft.init();
     tft.setRotation(4);
     tft.fillScreen(TFT_WHITE);
 
     lv_init();
-    lv_disp_draw_buf_init(&draw_buf, buf1, buf2, TFT_WIDTH * (TFT_HEIGHT/10));
+    
+    // Initialize PSRAM buffers if available, otherwise use static buffers
+    bool psram_success = init_psram_buffers();
+    
+#ifdef BOARD_HAS_PSRAM
+    if (psram_success && buf1 && buf2) {
+        // Use PSRAM buffers (larger size)
+        lv_disp_draw_buf_init(&draw_buf, buf1, buf2, BUFFER_SIZE);
+    } else {
+        // Fallback to static internal RAM buffers
+        static lv_color_t fallback_buf1[TFT_WIDTH * (TFT_HEIGHT/20)]; // Smaller for safety
+        static lv_color_t fallback_buf2[TFT_WIDTH * (TFT_HEIGHT/20)];
+        lv_disp_draw_buf_init(&draw_buf, fallback_buf1, fallback_buf2, TFT_WIDTH * (TFT_HEIGHT/20));
+    }
+#else
+    // No PSRAM support - use static buffers
+    lv_disp_draw_buf_init(&draw_buf, buf1, buf2, BUFFER_SIZE);
+#endif
 
     static lv_disp_drv_t disp_drv;
     lv_disp_drv_init(&disp_drv);
@@ -166,19 +214,27 @@ void lvgl_display_init() {
     lv_obj_set_style_line_width(line, 3, 0);
     lv_obj_set_style_line_color(line, lv_color_hex(0x000000), 0);
  */
+
+    // Laika label (piemēram, augšējā labajā stūrī)
+    time_label = lv_label_create(lv_scr_act());
+    lv_obj_set_style_text_font(time_label, &lv_font_montserrat_30, 0);
+    lv_obj_set_style_text_color(time_label, lv_color_hex(0x7997a3), 0);
+    lv_obj_set_pos(time_label, 190, 25); // Novieto pēc vajadzības
+    lv_label_set_text(time_label, LV_SYMBOL_WIFI " --:--");
+
+    //lv_bar_set_range(blue_bar, 5, targetTempC);
     blue_bar = lv_bar_create(lv_scr_act());
     lv_obj_set_size(blue_bar, 110, 350);
-    lv_obj_set_pos(blue_bar, 70, 40);
-    //lv_bar_set_range(blue_bar, 5, targetTempC);
+    lv_obj_set_pos(blue_bar, 40, 40);
     lv_obj_set_style_radius(blue_bar, 55, LV_PART_MAIN);
     lv_obj_set_style_clip_corner(blue_bar, true, LV_PART_MAIN);
     lv_obj_set_style_bg_color(blue_bar, lv_color_hex(0x7DD0F2), LV_PART_INDICATOR);
     lv_obj_set_style_radius(blue_bar, 0, LV_PART_INDICATOR);
 
+    //lv_bar_set_range(red_bar, 30, targetTempC+3);
     red_bar = lv_bar_create(lv_scr_act());
     lv_obj_set_size(red_bar, 110, 200);
-    lv_obj_align(red_bar, LV_ALIGN_LEFT_MID, 70, -50);
-    //lv_bar_set_range(red_bar, 30, targetTempC+3);
+    lv_obj_align(red_bar, LV_ALIGN_LEFT_MID, 40, -50);
     lv_obj_set_style_bg_opa(red_bar, LV_OPA_COVER, LV_PART_INDICATOR);
     lv_obj_set_style_bg_color(red_bar, lv_color_hex(0xFFC0C0), LV_PART_INDICATOR);
     lv_obj_set_style_bg_grad_color(red_bar, lv_color_hex(0x7DD0F2), LV_PART_INDICATOR);
@@ -191,7 +247,7 @@ void lvgl_display_init() {
 
     lv_obj_t * circle = lv_obj_create(lv_scr_act());
     lv_obj_set_size(circle, 150, 150);
-    lv_obj_set_pos(circle, 50, 520 - 200);
+    lv_obj_set_pos(circle, 20, 520 - 200);
     lv_obj_set_style_radius(circle, 75, 0);
     lv_obj_set_style_bg_color(circle, lv_color_hex(0x7DD0F2), 0);
     lv_obj_set_style_border_width(circle, 0, 0);
@@ -208,28 +264,85 @@ void lvgl_display_init() {
     temp_label = lv_label_create(lv_scr_act());
     lv_obj_set_style_text_font(temp_label, &ekstra, 0);
     lv_obj_set_style_text_color(temp_label, lv_color_hex(0xF3F4F3), 0);
-    lv_obj_set_pos(temp_label, 75, 360); // Novieto augšējā labajā stūrī
+    lv_obj_set_pos(temp_label, 45, 360); // Novieto augšējā labajā stūrī
     lv_label_set_text(temp_label, "--");
 
      temp0 = lv_label_create(lv_scr_act());
     lv_obj_set_style_text_font(temp0, &lv_font_montserrat_20, 0);
     lv_obj_set_style_text_color(temp0, lv_color_hex(0xF3F4F3), 0);
     lv_obj_set_style_bg_color(temp0, lv_color_hex(0xF3F4F3), 0);
-    lv_obj_set_pos(temp0, 170, 360);
+    lv_obj_set_pos(temp0, 140, 360);
     lv_label_set_text(temp0, "°C"); 
 
+     target = lv_label_create(lv_scr_act());
+    lv_obj_set_style_text_font(target, &lv_font_montserrat_22, 0);
+    lv_obj_set_style_text_color(target, lv_color_hex(0x7997a3), 0);
+    lv_obj_set_style_bg_color(target, lv_color_hex(0x7997a3), 0);
+    lv_obj_set_pos(target, 170, 110);
+    lv_label_set_text(target, "MAX temp."); 
 
-    // Damper label (zem temperatūras, piemēram, y = 70)
+
+     // Damper label (vērtība)
     damper_label = lv_label_create(lv_scr_act());
     lv_obj_set_style_text_font(damper_label, &lv_font_montserrat_28, 0);
-    lv_obj_align(damper_label, LV_ALIGN_TOP_RIGHT, -30, 70);
-    lv_label_set_text(damper_label, "Amortizators: --");
+    lv_obj_set_style_text_color(damper_label, lv_color_hex(0x7997a3), 0);
+    lv_obj_set_style_bg_color(damper_label, lv_color_hex(0x7997a3), 0);
+    lv_obj_set_pos(damper_label, 200, 290);
+    lv_label_set_text(damper_label, "-- %");
 
-    // Jauns mērķa temperatūras teksts (zem damper label)
+    lv_obj_t *label_one = lv_label_create(lv_scr_act());
+    lv_label_set_text(label_one, "2");
+    lv_obj_set_style_text_font(label_one, &eeet, 0);
+    lv_obj_set_style_text_color(label_one, lv_color_hex(0x7997a3), 0);
+    lv_obj_set_style_bg_color(label_one, lv_color_hex(0x7997a3), 0);
+    lv_obj_set_pos(label_one, 240,390);
+
+    // Damper status label (AUTO/FILL)
+    damper_status_label = lv_label_create(lv_scr_act());
+    lv_obj_set_style_text_font(damper_status_label, &ekstra1, 0);
+    lv_obj_set_style_text_color(damper_status_label, lv_color_hex(0x7997a3), 0);
+    lv_obj_set_style_bg_color(damper_status_label, lv_color_hex(0x7997a3), 0);
+    lv_obj_set_pos(damper_status_label, 180, 230); // Novieto zem damper label
+    lv_label_set_text(damper_status_label, "--");
+
+
+     // Jauns mērķa temperatūras teksts (zem damper label)
     target_temp_label = lv_label_create(lv_scr_act());
     lv_obj_set_style_text_font(target_temp_label, &lv_font_montserrat_28, 0);
-    lv_obj_align(target_temp_label, LV_ALIGN_TOP_RIGHT, -30, 110); // Novieto zem damper label
-    lv_label_set_text(target_temp_label, "Target: --°C");
+    lv_obj_set_style_text_color(target_temp_label, lv_color_hex(0x7997a3), 0);
+    lv_obj_set_style_bg_color(target_temp_label, lv_color_hex(0x7997a3), 0);
+    lv_obj_set_pos(target_temp_label, 210, 140); // Novieto zem damper label
+    lv_label_set_text(target_temp_label, "--°C");
+
+
+
+    // V-veida lauzta raustīta līnija ar 135° leņķi, katra mala 110px
+    static lv_point_t v_line_points[] = {
+        {0, 0},
+        {110, 0},
+        {
+            110 + (int)(80 * cosf(M_PI - M_PI * 115.0f / 180.0f)),
+            (int)(80 * sinf(M_PI - M_PI * 115.0f / 180.0f))
+        },
+        {
+            110 + (int)(80 * cosf(M_PI - M_PI * 115.0f / 180.0f)) + 100,
+            (int)(80 * sinf(M_PI - M_PI * 115.0f / 180.0f))
+        }
+    };
+    // Tagad ir 4 punkti: horizontāla, lauzta, horizontāla
+
+    lv_obj_t *v_dash_line = lv_line_create(lv_scr_act());
+    lv_line_set_points(v_dash_line, v_line_points, 4);
+    lv_obj_set_pos(v_dash_line, 40, 100); // Novieto pēc vajadzības
+
+    static lv_style_t style_v_dash;
+    lv_style_init(&style_v_dash);
+    lv_style_set_line_width(&style_v_dash, 2);
+    lv_style_set_line_color(&style_v_dash, lv_color_hex(0x7997a3));
+    lv_style_set_line_dash_gap(&style_v_dash, 7);
+    lv_style_set_line_dash_width(&style_v_dash, 7);
+
+    lv_obj_add_style(v_dash_line, &style_v_dash, LV_PART_MAIN);
 }
 
 // Atstāj tikai šo funkciju, kas tagad strādā tikai ar zaļo punktu
@@ -243,18 +356,116 @@ void lvgl_display_show_touch_point(uint16_t x, uint16_t y, bool show) {
     }
 }
 
+// Atjauno tikai damper vērtību
 void lvgl_display_update_damper() {
     if(damper_label) {
-        static char buf[32];
-        snprintf(buf, sizeof(buf), "Damper: %d", damper);
+        static char buf[16];
+        snprintf(buf, sizeof(buf), "%d %%", damper);
         lv_label_set_text(damper_label, buf);
+    }
+}
+
+// Atjauno damper statusu (AUTO/FILL)
+void lvgl_display_update_damper_status() {
+    if(damper_status_label) {
+        lv_label_set_text(damper_status_label, messageDamp.c_str());
     }
 }
 
 void lvgl_display_update_target_temp() {
     if(target_temp_label) {
         static char buf[32];
-        snprintf(buf, sizeof(buf), "Target: %d°C", targetTempC);
+        snprintf(buf, sizeof(buf), "%d°C", targetTempC);
         lv_label_set_text(target_temp_label, buf);
     }
+}
+
+void lvgl_display_set_time(const char* time_str) {
+    if (time_label) {
+        static char buf[32];
+        snprintf(buf, sizeof(buf), LV_SYMBOL_WIFI " %s", time_str);
+        lv_label_set_text(time_label, buf);
+    }
+}
+
+void show_time_on_display() {
+    // Use char array instead of String to save RAM
+    static char last_time_displayed[8] = "";  // HH:MM + null terminator = 6 chars max
+    static uint32_t last_check = 0;
+    
+    // Check time only every 10 seconds to save CPU (instead of every second)
+    // The actual minute change detection will ensure display updates when needed
+    if (millis() - last_check < 10000) {
+        return;
+    }
+    last_check = millis();
+    
+    // Get current time string (HH:MM format) - returns String, but we convert to char[]
+    String current_time_str = get_time_str();
+    
+    // Convert String to char array for comparison (save RAM)
+    char current_time[8];
+    strncpy(current_time, current_time_str.c_str(), sizeof(current_time)-1);
+    current_time[sizeof(current_time)-1] = '\0';
+    
+    // Update display only if time string has actually changed (minute changed)
+    if (strcmp(current_time, last_time_displayed) != 0 && strcmp(current_time, "--:--") != 0) {
+        strcpy(last_time_displayed, current_time);
+        lvgl_display_set_time(current_time);
+    }
+}
+
+void show_time_reset_cache() {
+    // Call this when NTP time changes significantly to reset the time cache
+    // This ensures the display will be updated immediately on the next check
+    
+    // Force an immediate update without using String objects
+    String current_time = get_time_str();
+    if (current_time != "--:--") {
+        lvgl_display_set_time(current_time.c_str());
+    }
+}
+
+// PSRAM initialization and buffer allocation
+bool init_psram_buffers() {
+#ifdef BOARD_HAS_PSRAM
+    if (!psramFound()) {
+        return false;
+    }
+    
+    size_t psram_free = ESP.getFreePsram();
+    size_t required_size = BUFFER_SIZE * sizeof(lv_color_t) * 2; // 2 buffers
+    
+    if (psram_free < required_size + 10000) { // Keep 10KB PSRAM free
+        return false;
+    }
+    
+    // Allocate buffers in PSRAM
+    buf1 = (lv_color_t*)ps_malloc(BUFFER_SIZE * sizeof(lv_color_t));
+    buf2 = (lv_color_t*)ps_malloc(BUFFER_SIZE * sizeof(lv_color_t));
+    
+    if (!buf1 || !buf2) {
+        if (buf1) free(buf1);
+        if (buf2) free(buf2);
+        buf1 = buf2 = nullptr;
+        return false;
+    }
+    
+    return true;
+#else
+    return false;
+#endif
+}
+
+void cleanup_psram_buffers() {
+#ifdef BOARD_HAS_PSRAM
+    if (buf1) {
+        free(buf1);
+        buf1 = nullptr;
+    }
+    if (buf2) {
+        free(buf2);
+        buf2 = nullptr;
+    }
+#endif
 }

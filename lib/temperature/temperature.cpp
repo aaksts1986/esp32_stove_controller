@@ -1,6 +1,9 @@
 #include "temperature.h"
 #include <OneWire.h>
 #include <DallasTemperature.h>
+#include "damper_control.h"
+#include "display_manager.h"  // Add display manager
+
 
 int temperature = 0;
 int targetTempC = 31;
@@ -15,6 +18,11 @@ static const unsigned long tempReadInterval = 3000;
 static unsigned long tempRequestTime = 0;
 static bool tempRequested = false;
 
+// Change detection variables
+static int lastDisplayedTemperature = -999;  // Force first update
+static unsigned long lastChangeTime = 0;
+static bool temperatureChanged = false;
+
 void initTemperatureSensor() {
     ds.begin();
     ds.setResolution(sensor1, 9);
@@ -28,11 +36,41 @@ void updateTemperature() {
     }
 
     if (tempRequested && millis() - tempRequestTime >= 100) {
-        temperature = ds.getTempC(sensor1);
-        if (temperature< 0) {
-            temperature = 5; // Avoid negative temperatures
+        int newTemperature = ds.getTempC(sensor1);
+        if (newTemperature < 0) {
+            newTemperature = 5;
         }
+        
+        // Check if temperature actually changed
+        if (newTemperature != lastDisplayedTemperature) {
+            temperature = newTemperature;
+            lastDisplayedTemperature = temperature;
+            lastChangeTime = millis();
+            temperatureChanged = true;
+            
+            // Notify display manager that temperature changed
+            display_manager_notify_temperature_changed();
+            
+            Serial.printf("Temperature changed: %d°C (was %d°C)\n", 
+                         temperature, lastDisplayedTemperature);
+        }
+        
+        damperControlLoop();
         lastTempRead = millis();
         tempRequested = false;
     }
+}
+
+// New function to check if temperature has changed
+bool hasTemperatureChanged() {
+    if (temperatureChanged) {
+        temperatureChanged = false;  // Reset flag
+        return true;
+    }
+    return false;
+}
+
+// Get time since last temperature change
+unsigned long getTimeSinceLastTempChange() {
+    return millis() - lastChangeTime;
 }
