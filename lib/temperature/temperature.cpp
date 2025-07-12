@@ -6,9 +6,9 @@
 
 
 int temperature = 0;
-int targetTempC = 31;
+int targetTempC = 62;
 int maxTemp = 80; // Maximum temperature for the target
-int temperatureMin = 30; // Minimum temperature to avoid negative values
+int temperatureMin = 45; // Minimum temperature to avoid negative values
 static OneWire oneWire(6);
 static DallasTemperature ds(&oneWire);
 static DeviceAddress sensor1 = {0x28, 0xFC, 0x70, 0x96, 0xF0, 0x01, 0x3C, 0xC0};

@@ -17,7 +17,7 @@ String messageDamp;
 int damper = 0;
 TaskHandle_t damperTaskHandle = NULL;
 int servoPort = 5;
-float refillTrigger = 500;
+float refillTrigger = 5000;
 int minDamper = 0;
 // --- Parametri un mainīgie ---
 
@@ -25,7 +25,7 @@ int minDamper = 0;
     int maxDamper = 100;
     int zeroDamper = 0;
 
-    float endTrigger = 1000; // vai cita piemērota vērtība
+    float endTrigger = 10000; // vai cita piemērota vērtība
     int kP = 15;            // Overall gain coefficient and P coefficient of the PID regulation
     float tauI = 1000;         // Integral time constant (sec/repeat)
     float tauD = 5;            // Derivative time constant (sec/reapeat)

@@ -17,3 +17,9 @@ void show_time_reset_cache(); // Reset time cache (call when NTP time changes)
 // PSRAM optimization functions
 bool init_psram_buffers();
 void cleanup_psram_buffers();
+
+// ...existing code...
+void lvgl_display_show_touch_point(uint16_t x, uint16_t y, bool show);
+void lvgl_display_show_settings(); // Jauna funkcija, kas atver iestatījumu logu
+void lvgl_display_close_settings(); // Jauna funkcija, kas aizver iestatījumu logu
+// ...existing code...

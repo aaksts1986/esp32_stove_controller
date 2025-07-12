@@ -11,7 +11,6 @@
 #include <WiFi.h>  
 
 
-
 int relay = 17;
 int buzzer = 14;
 
@@ -19,9 +18,10 @@ int buzzer = 14;
 void setup() {
     Serial.begin(115200);
     Serial.println("Sistēmas inicializācija.v..");
+
     
     touchButtonInit(2, TOUCH_THRESHOLD, TOUCH_DEBOUNCE_MS);
-    delay(500); // Pagaidām, lai nodrošinātu, ka sensori ir gatavi
+    delay(100); // Pagaidām, lai nodrošinātu, ka sensori ir gatavi
 
     // Initialize display system first (with PSRAM optimization)
     lvgl_display_init();
@@ -34,7 +34,7 @@ void setup() {
     telegram_setup(); // <-- Inicializē Telegram bot
     initTemperatureSensor();
     ota_setup();
-    delay(2000); // Pagaidām, lai nodrošinātu, ka sensori ir gatavi
+    delay(100); // Pagaidām, lai nodrošinātu, ka sensori ir gatavi
     Serial.print("Mana IP adrese: ");
     Serial.println(WiFi.localIP());
     
@@ -51,7 +51,7 @@ void setup() {
 
     lvgl_display_update_target_temp();
     
-    delay(1000); // Pagaidām, lai nodrošinātu, ka displejs ir gatavs
+    delay(100); // Pagaidām, lai nodrošinātu, ka displejs ir gatavs
     damperControlInit();
     startDamperControlTask();
 
@@ -59,7 +59,15 @@ void setup() {
     Serial.println("Final time display initialization check...");
     show_time_on_display();           // Display time immediately
 
-    
+      Serial.printf("RAM: %d%% (%d brīvi no %d)\n", 
+      100 - ESP.getFreeHeap()*100/ESP.getHeapSize(),
+      ESP.getFreeHeap(), 
+      ESP.getHeapSize());
+  
+  Serial.printf("PSRAM: %d%% (%d brīvi no %d)\n",
+      ESP.getPsramSize() > 0 ? 100 - ESP.getFreePsram()*100/ESP.getPsramSize() : 0,
+      ESP.getFreePsram(),
+      ESP.getPsramSize());
 
 
 }
@@ -69,6 +77,7 @@ void loop() {
     lv_timer_handler();
     ota_loop();
     handleTelegramMessages(); // Apstrādā Telegram ziņojumus
+
 
     // Sensor updates
     updateTemperature();

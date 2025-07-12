@@ -1,10 +1,76 @@
 #include "lvgl_display.h"
-#include <TFT_eSPI.h>  // Include TFT_eSPI here instead of in header
+//#include <TFT_eSPI.h>  // Include TFT_eSPI here instead of in header
 #include "temperature.h"
 #include "damper_control.h"
 #include "wifi1.h"
 #include "lvgl.h"
 #include "display_config.h"  // For buffer size configuration
+
+#include <LovyanGFX.hpp>
+#include <XPT2046_Touchscreen.h>
+#include <SPI.h>
+
+#define TOUCH_CS 9
+#define TOUCH_IRQ  7
+#define TOUCH_SCLK 12
+#define TOUCH_MOSI 11
+#define TOUCH_MISO 13
+
+XPT2046_Touchscreen ts(TOUCH_CS, TOUCH_IRQ);
+
+
+
+
+#define WIDTH 320
+#define HEIGHT 480
+
+// Define custom LGFX class for your display configuration
+class LGFX : public lgfx::LGFX_Device {
+private:
+  lgfx::Panel_ILI9488 _panel_instance;
+  lgfx::Bus_SPI _bus_instance;
+  lgfx::Light_PWM _light_instance;
+  
+
+public:
+  LGFX(void) {
+    // Bus configuration
+    auto bus_cfg = _bus_instance.config();
+    bus_cfg.spi_host = SPI2_HOST;
+    bus_cfg.spi_mode = 0;
+    bus_cfg.freq_write = 40000000;  // Palielināts ātrums
+    bus_cfg.freq_read = 16000000;
+    bus_cfg.pin_sclk = 12;
+    bus_cfg.pin_mosi = 11;
+    bus_cfg.pin_miso = 13;
+    bus_cfg.pin_dc = 18;
+    bus_cfg.dma_channel = 1;  // Ieslēgts DMA režīms
+    _bus_instance.config(bus_cfg);
+    _panel_instance.setBus(&_bus_instance);
+
+    // Panel configuration
+    auto panel_cfg = _panel_instance.config();
+    panel_cfg.pin_cs = 10;
+    panel_cfg.pin_rst = 40;
+    panel_cfg.panel_width = 320;
+    panel_cfg.panel_height = 480;
+    
+    _panel_instance.config(panel_cfg);
+
+    // Backlight configuration
+    auto light_cfg = _light_instance.config();
+    light_cfg.pin_bl = 8;
+    light_cfg.invert = false;
+    _light_instance.config(light_cfg);
+    _panel_instance.setLight(&_light_instance);
+
+
+    setPanel(&_panel_instance);
+  }
+};
+
+// Create display instance
+LGFX display;
 
 // LVGL un TFT mainīgie - OPTIMIZED BUFFER SIZE
 #define CAL_X_MIN 210
@@ -13,7 +79,7 @@
 #define CAL_Y_MAX 3900
 #define TOUCH_THRESHOLD 100
 
-#define ALPHA 0.3f  // 0 = stingrs filtrs, 1 = bez filtra
+
 
 // Buffer optimization: Use configurable buffer size based on display mode and PSRAM
 // PSRAM available: Use 3x larger buffers for better performance 
@@ -21,10 +87,10 @@
 // Without PSRAM: Standard sizes (1/15, 1/20, 1/10)
 
 #ifndef PSRAM_LVGL_BUFFER_FRACTION
-    #define PSRAM_LVGL_BUFFER_FRACTION 10  // Default fallback
+    #define PSRAM_LVGL_BUFFER_FRACTION 3  // Default fallback
 #endif
 
-TFT_eSPI tft = TFT_eSPI();
+
 static lv_disp_draw_buf_t draw_buf;
 
 // Conditional buffer allocation: PSRAM vs internal RAM
@@ -32,7 +98,7 @@ static lv_disp_draw_buf_t draw_buf;
     // Use PSRAM for large buffers when available
     DRAM_ATTR static lv_color_t *buf1 = nullptr;
     DRAM_ATTR static lv_color_t *buf2 = nullptr;
-    #define BUFFER_SIZE (TFT_WIDTH * (TFT_HEIGHT/PSRAM_LVGL_BUFFER_FRACTION))
+    #define BUFFER_SIZE (WIDTH * (HEIGHT/PSRAM_LVGL_BUFFER_FRACTION))
 #else
     // Use internal RAM for smaller buffers
     static lv_color_t buf1[TFT_WIDTH * (TFT_HEIGHT/PSRAM_LVGL_BUFFER_FRACTION)];
@@ -42,8 +108,7 @@ static lv_disp_draw_buf_t draw_buf;
 
 uint16_t last_x = 0, last_y = 0;
 bool last_touched = false;
-
-float smoothed_x = 0, smoothed_y = 0;
+static uint32_t last_touch_time = 0;  // Pievienojiet šo rindu
 
 lv_obj_t *blue_bar;
 lv_obj_t *red_bar;
@@ -69,10 +134,12 @@ void mans_disp_flush(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *col
     uint32_t w = (area->x2 - area->x1 + 1);
     uint32_t h = (area->y2 - area->y1 + 1);
 
-    tft.startWrite();
-    tft.setAddrWindow(area->x1, area->y1, w, h);
-    tft.pushColors(&color_p->full, w * h, true);
-    tft.endWrite();
+
+
+    display.startWrite();
+    display.setAddrWindow(area->x1, area->y1, w, h);
+    display.writePixels((uint16_t*)color_p, w * h);
+    display.endWrite();
 
     lv_disp_flush_ready(disp);
 }
@@ -82,9 +149,21 @@ bool ir_derigs_pieskariens(uint16_t x, uint16_t y) {
            (y >= CAL_Y_MIN) && (y <= CAL_Y_MAX);
 }
 
+
 void mans_pieskariens_read(lv_indev_drv_t *indev_drv, lv_indev_data_t *data) {
-    uint16_t touchX, touchY;
-    bool touched = tft.getTouchRaw(&touchX, &touchY);
+    uint16_t touchX = 0, touchY = 0;
+    bool touched = false;
+
+    // Izmanto XPT2046_Touchscreen bibliotēku
+    if (ts.tirqTouched()) {
+        TS_Point p = ts.getPoint();
+        touchX = p.x;
+        touchY = p.y;
+        touched = true;
+        Serial.printf("XPT2046: touched=1, x=%u, y=%u, z=%u\n", p.x, p.y, p.z);
+    } else {
+        Serial.println("XPT2046: touched=0");
+    }
 
     data->point.x = 0;
     data->point.y = 0;
@@ -99,8 +178,8 @@ void mans_pieskariens_read(lv_indev_drv_t *indev_drv, lv_indev_data_t *data) {
 
     if (!last_touched) return;
 
-    last_x = constrain(map(touchX, CAL_X_MIN, CAL_X_MAX, 0, TFT_WIDTH-1 ), 0, TFT_WIDTH-1);
-    last_y = constrain(map(touchY, CAL_Y_MIN, CAL_Y_MAX, TFT_HEIGHT-1, 0), 0, TFT_HEIGHT-1);
+    last_x = constrain(map(touchX, CAL_X_MIN, CAL_X_MAX, WIDTH-1, 0 ), 0, WIDTH-1);
+    last_y = constrain(map(touchY, CAL_Y_MIN, CAL_Y_MAX, HEIGHT-1, 0), 0, HEIGHT-1);
 
     data->point.x = last_x;
     data->point.y = last_y;
@@ -110,24 +189,22 @@ void mans_pieskariens_read(lv_indev_drv_t *indev_drv, lv_indev_data_t *data) {
                  touchX, touchY, last_x, last_y, data->point.x, data->point.y);
 }
 
-void process_touch() {
-    if (!last_touched) return;
 
-    float dist = sqrt(pow(last_x - smoothed_x, 2) + pow(last_y - smoothed_y, 2));
-    if (dist > 50) { // ja attālums liels, pārlēkt uzreiz
-        smoothed_x = last_x;
-        smoothed_y = last_y;
-    } else {
-        smoothed_x = ALPHA * last_x + (1.0f - ALPHA) * smoothed_x;
-        smoothed_y = ALPHA * last_y + (1.0f - ALPHA) * smoothed_y;
+void process_touch() {
+    if (!last_touched) {
+        return;
     }
+
+    Serial.println("Atvēršu iestatījumu logu!");
+    lvgl_display_show_settings(); // Izsauc uzreiz
+    last_touch_time = millis();
 }
 
 void lvgl_display_touch_update() {
     process_touch();
 
     if (last_touched) {
-        lvgl_display_show_touch_point((uint16_t)smoothed_x, (uint16_t)smoothed_y, true);
+        lvgl_display_show_touch_point((uint16_t)last_x, (uint16_t)last_y, true);
     } else {
         lvgl_display_show_touch_point(0, 0, false);
     }
@@ -157,9 +234,17 @@ void lvgl_display_update_bars() {
 
 
 void lvgl_display_init() {
-    tft.init();
-    tft.setRotation(4);
-    tft.fillScreen(TFT_WHITE);
+          ts.begin();
+  ts.setRotation(0);
+    //tft.init();
+    //tft.setRotation(4);
+    //tft.fillScreen(TFT_WHITE);
+    //tft.setSwapBytes(true); // Swap bytes for RGB565 format
+        display.init();
+    display.setBrightness(128);
+    
+    display.setRotation(0);
+    
 
     lv_init();
     
@@ -172,9 +257,9 @@ void lvgl_display_init() {
         lv_disp_draw_buf_init(&draw_buf, buf1, buf2, BUFFER_SIZE);
     } else {
         // Fallback to static internal RAM buffers
-        static lv_color_t fallback_buf1[TFT_WIDTH * (TFT_HEIGHT/20)]; // Smaller for safety
-        static lv_color_t fallback_buf2[TFT_WIDTH * (TFT_HEIGHT/20)];
-        lv_disp_draw_buf_init(&draw_buf, fallback_buf1, fallback_buf2, TFT_WIDTH * (TFT_HEIGHT/20));
+        static lv_color_t fallback_buf1[WIDTH * (HEIGHT/20)]; // Smaller for safety
+        static lv_color_t fallback_buf2[WIDTH * (HEIGHT/20)];
+        lv_disp_draw_buf_init(&draw_buf, fallback_buf1, fallback_buf2, WIDTH * (HEIGHT/20));
     }
 #else
     // No PSRAM support - use static buffers
@@ -183,8 +268,8 @@ void lvgl_display_init() {
 
     static lv_disp_drv_t disp_drv;
     lv_disp_drv_init(&disp_drv);
-    disp_drv.hor_res = tft.width();
-    disp_drv.ver_res = tft.height();
+    disp_drv.hor_res = display.width();
+    disp_drv.ver_res = display.height();
     disp_drv.flush_cb = mans_disp_flush;
     disp_drv.draw_buf = &draw_buf;
     lv_disp_drv_register(&disp_drv);
@@ -197,23 +282,6 @@ void lvgl_display_init() {
 
     lv_obj_set_style_bg_color(lv_scr_act(), lv_color_hex(0xF3F4F3), 0);
 
-  /*   lv_obj_t * rect = lv_obj_create(lv_scr_act());
-    lv_obj_set_size(rect, 300, 400);
-    lv_obj_align(rect, LV_ALIGN_TOP_MID, 0, 15);
-    lv_obj_set_style_radius(rect, 20, 0);
-    lv_obj_set_style_bg_color(rect, lv_color_hex(0xfcfdfd), 0);
-    lv_obj_set_style_border_color(rect, lv_color_hex(0x000000), 0);
-    lv_obj_set_style_border_width(rect, 2, 0); */
-
-/*     // Melna vertikāla līnija pa vidu
-    static lv_point_t line_points[] = { {150, 0}, {150, 400} }; // 150 ir puse no 300 (rect platums)
-    lv_obj_t * line = lv_line_create(lv_scr_act());
-    lv_line_set_points(line, line_points, 2);
-    lv_obj_align(line, LV_ALIGN_TOP_MID, -85, 15);
-    //lv_obj_set_pos(line, (tft.width() - 300)/2, tft.height() - 400 -30); // rect kreisais augšējais stūris
-    lv_obj_set_style_line_width(line, 3, 0);
-    lv_obj_set_style_line_color(line, lv_color_hex(0x000000), 0);
- */
 
     // Laika label (piemēram, augšējā labajā stūrī)
     time_label = lv_label_create(lv_scr_act());
@@ -345,6 +413,64 @@ void lvgl_display_init() {
     lv_obj_add_style(v_dash_line, &style_v_dash, LV_PART_MAIN);
 }
 
+// Pievienojiet šos mainīgos pie citiem globālajiem mainīgajiem
+static lv_obj_t *settings_panel = NULL;
+static bool settings_open = false;
+
+// Funkcija, kas parāda iestatījumu logu
+void lvgl_display_show_settings() {
+    Serial.println("lvgl_display_show_settings() izsaukta.");
+    if (settings_open || settings_panel != NULL) {
+        Serial.println("Iestatījumu logs jau atvērts.");
+        return;  // Logs jau ir atvērts
+    }
+
+    // Izveidojam iestatījumu paneli
+    settings_panel = lv_obj_create(lv_scr_act());
+    lv_obj_set_size(settings_panel, 280, 200);
+    lv_obj_align(settings_panel, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_style_bg_color(settings_panel, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_radius(settings_panel, 15, 0);
+    lv_obj_set_style_border_width(settings_panel, 2, 0);
+    lv_obj_set_style_border_color(settings_panel, lv_color_hex(0x7997a3), 0);
+    lv_obj_set_style_shadow_width(settings_panel, 20, 0);
+    lv_obj_set_style_shadow_color(settings_panel, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_shadow_opa(settings_panel, LV_OPA_30, 0);
+
+    // Pievienojam virsrakstu
+    lv_obj_t *title = lv_label_create(settings_panel);
+    lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(title, lv_color_hex(0x000000), 0);
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 20);
+    lv_label_set_text(title, "SETTINGS");
+
+    // Pievienojam aizvēršanas pogu
+    lv_obj_t *close_btn = lv_btn_create(settings_panel);
+    lv_obj_set_size(close_btn, 100, 40);
+    lv_obj_align(close_btn, LV_ALIGN_BOTTOM_MID, 0, -20);
+    lv_obj_set_style_bg_color(close_btn, lv_color_hex(0x7997a3), 0);
+    lv_obj_add_event_cb(close_btn, [](lv_event_t *e) {
+        lvgl_display_close_settings();
+    }, LV_EVENT_CLICKED, NULL);
+
+    lv_obj_t *close_label = lv_label_create(close_btn);
+    lv_label_set_text(close_label, "Close");
+    lv_obj_center(close_label);
+
+    settings_open = true;
+}
+
+// Funkcija, kas aizver iestatījumu logu
+void lvgl_display_close_settings() {
+    Serial.println("lvgl_display_close_settings() izsaukta.");
+    if (settings_panel != NULL) {
+        lv_obj_del(settings_panel);
+        settings_panel = NULL;
+        settings_open = false;
+        Serial.println("Iestatījumu logs aizvērts.");
+    }
+}
+
 // Atstāj tikai šo funkciju, kas tagad strādā tikai ar zaļo punktu
 void lvgl_display_show_touch_point(uint16_t x, uint16_t y, bool show) {
     if (!raw_touch_point) return;
@@ -469,3 +595,4 @@ void cleanup_psram_buffers() {
     }
 #endif
 }
+
