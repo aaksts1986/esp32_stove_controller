@@ -42,8 +42,8 @@ bool touchButtonPressed() {
 
 void touchButtonHandle() {
     if (touchButtonPressed()) {
-        targetTempC += 1;
-        if (targetTempC > maxTemp) targetTempC = temperatureMin;
+        targetTempC += 2;
+        if (targetTempC > maxTemp) targetTempC = temperaturemini2;
         display_manager_notify_target_temp_changed();  // Use display manager for consistency
     }
 }

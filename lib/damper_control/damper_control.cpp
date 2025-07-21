@@ -5,56 +5,101 @@
 #include <freertos/task.h>
 #include "temperature.h" 
 #include "touch_button.h"
-#include "display_manager.h"  // Add for change notifications
+#include "display_manager.h"
 
+// Servo un kontroles mainīgie
+Servo mansServo;
+String messageDamp = "MANUAL";
 
-
-
-Servo mansServo; // Pieejams no main.cpp
-
-String messageDamp;
-
-int damper = 0;
-TaskHandle_t damperTaskHandle = NULL;
+// Servo konfigurācija
+static bool servoAttached = false;
 int servoPort = 5;
-float refillTrigger = 5000;
+int servoAngle = 35;
+float servoCalibration = 1.5;
+int servoOffset = 29;
+int minUs = 500;
+int maxUs = 2500;
+int minAngle = 0;
+int maxAngle = 180;
+
+// Damper pozīcijas mainīgie
+int damper = 100;
 int minDamper = 0;
-// --- Parametri un mainīgie ---
+int maxDamper = 100;
+int zeroDamper = 0;
+int oldDamper = 0;
 
+// Uzdevuma rokturis
+TaskHandle_t damperTaskHandle = NULL;
 
-    int maxDamper = 100;
-    int zeroDamper = 0;
+// PID kontroliera parametri
+float refillTrigger = 5000;
+float endTrigger = 10000;
+int kP = 25;
+float tauI = 1000;
+float tauD = 5;
+float kI = kP / tauI;
+float kD = kP / tauD;
 
-    float endTrigger = 10000; // vai cita piemērota vērtība
-    int kP = 15;            // Overall gain coefficient and P coefficient of the PID regulation
-    float tauI = 1000;         // Integral time constant (sec/repeat)
-    float tauD = 5;            // Derivative time constant (sec/reapeat)
-    float kI =  kP/tauI;        // I coefficient of the PID regulation
-    float kD = kP/tauD;  
-    int oldDamper = 0;
-    int servoAngle = 35;
-    int maxDamperx = 100;
-    float servoCalibration = 1.5;
-    int servoOffset = 29;      // D coefficient of the PID regulation
+// Temperatūras vēstures masīvs un PID mainīgie
+int TempHist[10] = {0};
+float errP = 0;
+float errI = 0;
+float errD = 0;
+float errOld = 0;
 
-    int TempHist[10] = {0};
-    float errP = 0;
-    float errI = 0;
-    float errD = 0;
-    float errOld = 0;
-    int minUs = 500;    // servo minimālais impulsa platums
-    int maxUs = 2500;   // servo maksimālais impulsa platums
-    int minAngle = 0;   // parasti 0
-    int maxAngle = 180; // parasti 180
+// Asinhronās servo kustības mainīgie
+static int targetDamper = 0;
+static int currentDamper = 0;
+static bool servoMoving = false;
+static TickType_t lastMoveTime = 0;
+int servoStepInterval = 50;  // Servo kustības solis milisekundēs (var mainīt no iestatījumiem)
 
+int buzzer = 14;
 
-void damperControlInit() {
-    mansServo.attach(servoPort);
-    mansServo.write(50);
-    mansServo.detach();
+// Buzzer kontroles mainīgie
+bool isWarningActive = false;
+TaskHandle_t buzzerTaskHandle = NULL;
+
+// Buzzer kontroles funkcijas
+void initBuzzer() {
+    pinMode(buzzer, OUTPUT);
+    digitalWrite(buzzer, LOW);
 }
 
+// Buzzer uzdevuma funkcija, kas laiž nepārtrauktu skaņu
+void buzzerTask(void *pvParameters) {
+    while (1) {
+        if (isWarningActive) {
+            // Mainīgais signāls - 100ms skaņa, 100ms pauze
+            digitalWrite(buzzer, HIGH);
+            delay(100);  
+            digitalWrite(buzzer, LOW);
+            delay(100);
+        } else {
+            // Ja brīdinājums ir izslēgts, apstādinam signālu un gaidām
+            digitalWrite(buzzer, LOW);
+            vTaskDelay(pdMS_TO_TICKS(100));
+        }
+    }
+}
+
+void startBuzzerSound() {
+    isWarningActive = true;
+}
+
+void stopBuzzerSound() {
+    isWarningActive = false;
+}
+
+void playWarningSound() {
+    startBuzzerSound();
+}
+
+// Aprēķina vidējo vērtību masīva daļai
 int average(const int* arr, int start, int count) {
+    if (count <= 0) return 0;
+    
     int sum = 0;
     for (int i = start; i < start + count; ++i) {
         sum += arr[i];
@@ -62,162 +107,203 @@ int average(const int* arr, int start, int count) {
     return sum / count;
 }
 
+// Pārbauda, vai tikko ir pievienota jauna malka
+// Atgriež true, ja pēdējo temperatūru vidējā vērtība ir augstāka nekā iepriekšējo
 bool WoodFilled(int CurrentTemp) {
+    // Pavirza vēstures datus uz priekšu
     for (int i = 9; i > 0; --i) {
         TempHist[i] = TempHist[i - 1];
     }
     TempHist[0] = CurrentTemp;
 
-    int recent_sum = 0, older_sum = 0;
-    for(int i = 0; i < 5; i++) recent_sum += TempHist[i];
-    for(int i = 5; i < 10; i++) older_sum += TempHist[i];
+    // Aprēķina jaunāko un vecāko mērījumu vidējās vērtības
+    int recent_avg = average(TempHist, 0, 5);
+    int older_avg = average(TempHist, 5, 5);
 
-    if (recent_sum > older_sum) {
-        
-        return true;
-    }
-    
-    return false;
+    // Ja jaunākās temperatūras ir augstākas, tad malka ir papildināta
+    return recent_avg > older_avg;
 }
 
 void ieietDeepSleepArTouch() {
-    Serial.println("Sagatavošanās deep sleep...");
-
-
-
-    // Aktivē touch wakeup
     touchSleepWakeUpEnable (2, thresholds);
-
-    Serial.println("Ej Deep Sleep... pieskaries, lai pamodinātu.");
     delay(500);
-
     esp_deep_sleep_start();
 }
 
+#include "lvgl_display.h" // Pievienojam, lai varētu piekļūt is_manual_damper_mode() funkcijai
+
 void damperControlLoop() {
-    if (errI < endTrigger) {
+    int oldDamperValue = damper;
+    String oldMessage = messageDamp;
+    
+    // JAUNS: Pārbaudām vai esam manuālajā režīmā
+    if (is_manual_damper_mode()) {
+        // Manuālajā režīmā damper vērtība tiek uzstādīta no UI roller,
+        // tāpēc šeit neveicam nekādas izmaiņas
+        messageDamp = "MANUAL";
+    } 
+    else if (errI < endTrigger) {
+        // PID regulators
         errP = targetTempC - temperature;
         errI = errI + errP;
         errD = errP - errOld;
         errOld = errP;
-        WoodFilled(temperature);
-
-        int sum_recent = 0, sum_old = 0;
-        for(int i=0; i<5; i++) sum_recent += TempHist[i];
-        for(int i=5; i<10; i++) sum_old += TempHist[i];
-
-        int wood = sum_recent / 5;
-        int wood2 = sum_old / 5;
-        Serial.print("/erri:" + String(errI) +" |  " + "p:" + String(errP) + " |  " + "o:" + String(wood) + " |  " + "p2:" + String(wood2) + " |  " + "d:" + String(errD) + " |  " + "t:" + String(temperature) + "\n");
-        if (wood > wood2) {
+        
+        // Pārbauda, vai ir pievienota jauna malka
+        bool woodAdded = WoodFilled(temperature);
+        
+        // Ja ir pievienota jauna malka, atiestatām integrālo kļūdu
+        if (woodAdded) {
             errI = 0;
         }
-        int oldDamperValue = damper;  // Save old value before calculation
+        
+        // Aprēķinām jauno damper vērtību izmantojot PID algoritmu
         damper = kP * errP + kI * errI + kD * errD;
-        if (damper < minDamper) damper = minDamper;
-        if (damper > maxDamper) damper = maxDamper;
         
-        // Notify display if damper value changed (even small changes)
-        if (damper != oldDamperValue) {
-            display_manager_notify_damper_position_changed();
-            Serial.printf("Damper value changed: %d -> %d\n", oldDamperValue, damper);
-        }
+        // Ierobežojam vērtību noteiktajā diapazonā
+        damper = constrain(damper, minDamper, maxDamper);
         
-       // Serial.printf("Malka: %d", errI);
-        //Refill Alarm
-        String oldMessage = messageDamp;
+        // Statusa ziņojuma atjaunināšana
         if (errI > refillTrigger) { 
-            messageDamp = "FILL!";  
+            messageDamp = "FILL!";
         } else {
             messageDamp = "AUTO";
         }
-        
-        // Notify display if message changed
-        if (messageDamp != oldMessage) {
-            display_manager_notify_damper_changed();  // Only status update
-            Serial.printf("Damper status changed: %s -> %s\n", oldMessage.c_str(), messageDamp.c_str());
-        }
-
     } else {
+        // Sistēma ir beigusi darboties (sasniegta maksimālā integrālā kļūda)
         if (temperature < temperatureMin) {
-            int oldDamperValue = damper;
             damper = zeroDamper;
-            
-            // Notify if damper value changed
-            if (damper != oldDamperValue) {
-                display_manager_notify_damper_position_changed();
-                Serial.printf("Damper value changed (END): %d -> %d\n", oldDamperValue, damper);
-            }
-            
-            String oldMessage = messageDamp;
             messageDamp = "END!";
             
-            // Notify display if message changed
+            // Paziņojam par izmaiņām un ieslēdzam deep sleep
+            if (damper != oldDamperValue) {
+                display_manager_notify_damper_position_changed();
+            }
+            
             if (messageDamp != oldMessage) {
-                display_manager_notify_damper_changed();  // Only status update
-                Serial.printf("Damper status changed: %s -> %s\n", oldMessage.c_str(), messageDamp.c_str());
+                display_manager_notify_damper_changed();
             }
             
             delay(500);
             ieietDeepSleepArTouch();
-
-
         }
     }
-
+    
+    // Nodrošinam, ka integrālā kļūda nav negatīva
     if (errI < 0) {
         errI = 0;
     }
-}
-
-
-
-void moveServoToDamper() {
-    int diff = damper - oldDamper;
-    if (abs(diff) > 8) {
-        mansServo.attach(servoPort);
-        if (diff > 0) {
-            for (int i = 0; i < diff; i++) {
-                int angle = (oldDamper + i + 1) * servoAngle / (maxDamperx * servoCalibration) + servoOffset;
-                int us = minUs + (angle - minAngle) * (maxUs - minUs) / (maxAngle - minAngle);
-                mansServo.writeMicroseconds(us);
-                vTaskDelay(pdMS_TO_TICKS(50));
-            }
-        } else if (diff < 0) {
-            for (int i = 0; i < abs(diff); i++) {
-                int angle = (oldDamper - i - 1) * servoAngle / (maxDamperx * servoCalibration) + servoOffset;
-                int us = minUs + (angle - minAngle) * (maxUs - minUs) / (maxAngle - minAngle);
-                mansServo.writeMicroseconds(us);
-                vTaskDelay(pdMS_TO_TICKS(50));
-            }
-        }
-        mansServo.detach();
-        oldDamper = damper;
-        
-        // Notify display manager that damper position changed
-        display_manager_notify_damper_position_changed();  // Position update
-        Serial.printf("Damper moved: %d -> %d (diff: %d)\n", oldDamper, damper, diff);
+    
+    // Paziņojam par izmaiņām tikai ja tādas ir notikušas
+    if (damper != oldDamperValue) {
+        display_manager_notify_damper_position_changed();
+    }
+    
+    if (messageDamp != oldMessage) {
+        display_manager_notify_damper_changed();
     }
 }
 
+/**
+ * Iestata jaunu mērķa pozīciju servo motoram
+ * @param newTarget jaunā pozīcija (0-100%)
+ */
+void setDamperTarget(int newTarget) {
+    // Mainām mērķi tikai ja tas ir atšķirīgs no pašreizējā
+    if (newTarget != targetDamper) {
+        targetDamper = newTarget;
+        servoMoving = true;
+        
+        // Pieslēdzam servo tikai tad, kad tas ir nepieciešams
+        if (!servoAttached) {
+            mansServo.attach(servoPort);
+            servoAttached = true;
+        }
+    }
+}
 
+/**
+ * Servo motora kustības apstrādes funkcija
+ * Pakāpeniski kustina servo uz mērķa pozīciju
+ */
+void moveServoToDamper() {
+    // Ja ir jauns mērķis un servo nav kustībā, sākam jaunu kustību
+    if ((damper != targetDamper) && !servoMoving && (currentDamper != damper)) {
+        setDamperTarget(damper);
+    }
+    
+    // Kustinām servo, ievērojot soļu intervālu
+    if (servoMoving && (xTaskGetTickCount() - lastMoveTime > pdMS_TO_TICKS(servoStepInterval))) {
+        int diff = targetDamper - currentDamper;
+        
+        if (abs(diff) > 0) {
+            // Vienmērīga kustība ar vienu soli vienā reizē
+            currentDamper += (diff > 0) ? 1 : -1;
+            
+            // Pārveidojam procentuālo pozīciju par leņķi
+            int angle = map(currentDamper, 0, 100, 
+                           servoOffset, 
+                           servoOffset + servoAngle / servoCalibration);
+            
+            // Pārveidojam leņķi mikrosekundēs
+            int us = map(angle, minAngle, maxAngle, minUs, maxUs);
+            
+            // Iestatām servo pozīciju
+            mansServo.writeMicroseconds(us);
+            lastMoveTime = xTaskGetTickCount();
+        } else {
+            // Mērķis sasniegts
+            servoMoving = false;
+            oldDamper = currentDamper;
+            display_manager_notify_damper_position_changed();
+            
+            // Atslēdzam servo, lai taupītu enerģiju
+            if (servoAttached) {
+                mansServo.detach();
+                servoAttached = false;
+            }
+        }
+    }
+}
 
+/**
+ * FreeRTOS uzdevuma funkcija, kas pastāvīgi apstrādā servo kustības
+ * Darbojas atsevišķā kodolā ar zemu prioritāti
+ */
 void DamperTask(void *pvParameters) {
     while (1) {
         moveServoToDamper();
-        vTaskDelay(pdMS_TO_TICKS(100));
+        vTaskDelay(pdMS_TO_TICKS(10)); // 10ms = 100Hz refresh rate
     }
 }
 
+/**
+ * Sāk servo kontroles uzdevumu atsevišķā kodolā
+ * Šo funkciju vajadzētu izsaukt setup() funkcijā
+ */
 void startDamperControlTask() {
+    // Inicializējam buzzer
+    initBuzzer();
+    
+    // Pievienojam uzdevumu otrajam kodolam ar zemu prioritāti
     xTaskCreatePinnedToCore(
-        DamperTask,
-        "DamperTask",
-        2048,
-        NULL,
-        1,
-        &damperTaskHandle,
-        1
+        DamperTask,          // Uzdevuma funkcija
+        "DamperTask",        // Uzdevuma nosaukums
+        2048,                // Steka izmērs
+        NULL,                // Parametri (nav)
+        1,                   // Prioritāte (zema)
+        &damperTaskHandle,   // Uzdevuma rokturis
+        1                    // Kodola numurs (1 = otrs kodols)
+    );
+    
+    // Pievienojam buzzer uzdevumu otrajam kodolam
+    xTaskCreatePinnedToCore(
+        buzzerTask,          // Uzdevuma funkcija
+        "BuzzerTask",        // Uzdevuma nosaukums
+        1024,                // Steka izmērs
+        NULL,                // Parametri (nav)
+        1,                   // Prioritāte (zema)
+        &buzzerTaskHandle,   // Uzdevuma rokturis
+        1                    // Kodola numurs (1 = otrs kodols)
     );
 }
-

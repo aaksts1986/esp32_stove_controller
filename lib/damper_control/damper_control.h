@@ -9,12 +9,31 @@ void moveServoToDamper();
 void startDamperControlTask();
 void ieietDeepSleepArTouch();
 
+// Buzzer funkcijas
+void initBuzzer();
+void playWarningSound();
+void startBuzzerSound();
+void stopBuzzerSound();
+void buzzerTask(void *pvParameters);
+
 
 extern int damper;
 extern int minDamper;
 extern int maxDamper;
 extern int zeroDamper;
 extern int kP;  // PID regulatora koeficients
+extern float tauI;  // PID integrāla komponentes laika konstante
+extern float tauD;  // PID diferenciālā komponentes laika konstante
+extern float kI;  // PID integrāla koeficients
+extern float kD;  // PID diferenciālā koeficients
 extern float endTrigger;
 extern float refillTrigger;
 extern String messageDamp;
+
+// Servo parametri
+extern int servoAngle;  // Servo motora maksimālais leņķis
+extern int servoStepInterval;  // Servo kustības solis milisekundēs
+
+// Buzzer pins un statuss
+extern int buzzer;
+extern bool isWarningActive;

@@ -6,9 +6,11 @@
 
 
 int temperature = 0;
-int targetTempC = 62;
+int targetTempC = 66;
 int maxTemp = 80; // Maximum temperature for the target
-int temperatureMin = 45; // Minimum temperature to avoid negative values
+int temperatureMin = 46; // Minimum temperature to avoid negative values
+int temperaturemini2 = 64; // Maximum temperature for the sensor
+int warningTemperature = 85; // Brīdinājuma temperatūras slieksnis
 static OneWire oneWire(6);
 static DallasTemperature ds(&oneWire);
 static DeviceAddress sensor1 = {0x28, 0xFC, 0x70, 0x96, 0xF0, 0x01, 0x3C, 0xC0};
@@ -51,8 +53,7 @@ void updateTemperature() {
             // Notify display manager that temperature changed
             display_manager_notify_temperature_changed();
             
-            Serial.printf("Temperature changed: %d°C (was %d°C)\n", 
-                         temperature, lastDisplayedTemperature);
+
         }
         
         damperControlLoop();

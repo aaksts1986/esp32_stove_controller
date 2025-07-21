@@ -24,12 +24,9 @@ typedef struct {
     // Event flags for forced updates
     bool force_temp_update;
     bool force_damper_update;
-    bool force_damper_status_update;  // NEW: separate flag for damper status
+    bool force_damper_status_update;
     bool force_time_update;
     bool force_all_update;
-    
-    // Statistics
-    display_stats_t stats;
     
     // Initialization flag
     bool initialized;
@@ -59,9 +56,6 @@ void display_manager_init() {
     dm_state.force_time_update = false;
     dm_state.force_all_update = false;
     
-    // Reset statistics
-    memset(&dm_state.stats, 0, sizeof(display_stats_t));
-    
     dm_state.initialized = true;
 }
 
@@ -71,8 +65,6 @@ void display_manager_update() {
     }
     
     unsigned long now = millis();
-    dm_state.stats.total_updates++;
-    dm_state.stats.last_update_time = now;
     
     // High priority: Touch updates (responsive UI)
     if ((now - dm_state.last_touch_update >= dm_state.touch_update_interval) || 
@@ -80,7 +72,6 @@ void display_manager_update() {
         
         lvgl_display_touch_update();
         dm_state.last_touch_update = now;
-        dm_state.stats.touch_updates++;
     }
     
     // Medium priority: Temperature and bars (ONLY when temperature changes OR forced)
@@ -103,18 +94,8 @@ void display_manager_update() {
             lvgl_display_update_target_temp();
         }
         
-        // NOTE: Damper status updates separately when messageDamp changes
-        
         dm_state.last_temp_update = now;
         dm_state.force_temp_update = false;
-        dm_state.stats.temp_updates++;
-        
-        if (temp_fallback_needed) {
-            // Forced update happened (silent for production)
-        }
-    } else {
-        // Count skipped updates for statistics
-        dm_state.stats.skipped_updates++;
     }
     
     // Medium priority: Damper updates (ONLY when damper changes OR forced)
@@ -129,17 +110,8 @@ void display_manager_update() {
     
     if (should_update_damper || damper_fallback_needed) {
         lvgl_display_update_damper();
-        // NOTE: damper status updates separately when messageDamp changes
         dm_state.last_damper_update = now;
         dm_state.force_damper_update = false;
-        dm_state.stats.damper_updates++;
-        
-        if (damper_fallback_needed) {
-            // Forced update happened (silent for production)
-        }
-    } else {
-        // Count skipped damper updates
-        dm_state.stats.skipped_updates++;
     }
     
     // Separate handling for damper status (only when messageDamp changes)
@@ -200,11 +172,11 @@ void display_manager_notify_temperature_changed() {
 }
 
 void display_manager_notify_damper_changed() {
-    dm_state.force_damper_status_update = true;  // Only update status, not position
+    dm_state.force_damper_status_update = true;
 }
 
 void display_manager_notify_damper_position_changed() {
-    dm_state.force_damper_update = true;  // Update damper position
+    dm_state.force_damper_update = true;
 }
 
 void display_manager_notify_target_temp_changed() {
@@ -214,14 +186,6 @@ void display_manager_notify_target_temp_changed() {
 void display_manager_notify_time_synced() {
     // Called when NTP time is synchronized - force immediate time update
     dm_state.force_time_update = true;
-}
-
-display_stats_t display_manager_get_stats() {
-    return dm_state.stats;
-}
-
-void display_manager_reset_stats() {
-    memset(&dm_state.stats, 0, sizeof(display_stats_t));
 }
 
 void display_manager_apply_config_preset() {
@@ -234,22 +198,4 @@ void display_manager_apply_config_preset() {
 
 const char* display_manager_get_config_name() {
     return CONFIG_NAME;
-}
-
-void display_manager_get_efficiency_stats(float* efficiency, uint32_t* total_updates, 
-                                         uint32_t* skipped_updates, uint32_t* uptime_minutes) {
-    if (efficiency) {
-        if (dm_state.stats.total_updates > 0) {
-            *efficiency = 100.0f - (dm_state.stats.skipped_updates * 100.0f / dm_state.stats.total_updates);
-        } else {
-            *efficiency = 0.0f;
-        }
-    }
-    if (total_updates) *total_updates = dm_state.stats.total_updates;
-    if (skipped_updates) *skipped_updates = dm_state.stats.skipped_updates;
-    if (uptime_minutes) *uptime_minutes = millis() / 60000;
-}
-
-void display_manager_force_update_damper_status() {
-    lvgl_display_update_damper_status();
 }
