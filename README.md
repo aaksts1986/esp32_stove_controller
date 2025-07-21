@@ -68,7 +68,7 @@ Papildināts fragments README.md sadaļai "Aparatūras pieslēgumi" un "Papildu 
 | Relejs 1         | 17        | Zaļš        | Krāsns vadība                    |
 | Relejs 2         | 16        | Oranžs      | Papildu vadība                   |
 | Buzzer           | 14        |             | Skaņas signāls                   |
-| TFT Displejs     | ...       | ...         | Skārienjutīgs, pieslēgums atbilstoši displeja dokumentācijai |
+| TFT s led        | 8         | ...         | Skārienjutīgs, pieslēgums atbilstoši displeja dokumentācijai |
 
 > **Piezīme:** Displejs ir skārienjutīgs un ļauj lietotājam mainīt iestatījumus tieši uz ekrāna.
 
