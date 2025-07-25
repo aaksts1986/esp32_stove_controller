@@ -2,6 +2,7 @@
 #include "lvgl_display.h"
 #include "temperature.h"
 #include "damper_control.h"
+#include "settings_storage.h"
 
 // Global objects
 static lv_obj_t * settings_screen = NULL;
@@ -269,7 +270,7 @@ static void kp_roller_event_handler(lv_event_t * e)
     
     // Atjaunojam atkarīgos parametrus
     kI = kP / tauI;
-    kD = kP * tauD;
+    kD = kP / tauD;
 }
 
 // Min temperature roller event handler
@@ -476,15 +477,15 @@ void settings_screen_create(void)
     lv_obj_set_style_border_width(header, 0, 0);
     lv_obj_set_style_pad_all(header, 0, 0);
     
-    // Back button
+    // Back button - kreisajā pusē
     lv_obj_t * back_btn = lv_btn_create(header);
-    lv_obj_set_size(back_btn, 50, 40);
-    lv_obj_set_pos(back_btn, 0, 5);
+    lv_obj_set_size(back_btn, 80, 30);
+    lv_obj_set_pos(back_btn, 0, 0);
     lv_obj_set_style_bg_color(back_btn, SETTINGS_ACCENT_COLOR, 0);
     lv_obj_set_style_radius(back_btn, 8, 0);
     
     lv_obj_t * back_label = lv_label_create(back_btn);
-    lv_label_set_text(back_label, LV_SYMBOL_LEFT);
+    lv_label_set_text(back_label, "Back");
     lv_obj_set_style_text_color(back_label, lv_color_white(), 0);
     lv_obj_center(back_label);
     
@@ -492,12 +493,35 @@ void settings_screen_create(void)
         lvgl_display_close_settings();
     }, LV_EVENT_CLICKED, NULL);
     
+    // Save button - labajā pusē
+    lv_obj_t * save_btn = lv_btn_create(header);
+    lv_obj_set_size(save_btn, 80, 30);
+    lv_obj_set_pos(save_btn, LV_HOR_RES - 20 - 100 - 20, 0); // Labajā pusē (platums - robežas - pogas platums - papildu atstarpe)
+    lv_obj_set_style_bg_color(save_btn, SETTINGS_ACCENT_COLOR, 0);
+    lv_obj_set_style_radius(save_btn, 8, 0);
+    
+    lv_obj_t * save_label = lv_label_create(save_btn);
+    lv_label_set_text(save_label, "Save");
+    lv_obj_set_style_text_color(save_label, lv_color_white(), 0);
+    lv_obj_center(save_label);
+    
+    lv_obj_add_event_cb(save_btn, [](lv_event_t * e) {
+        // Saglabājam visus iestatījumus
+        bool success = saveAllSettings();
+        
+        // Ja saglabāšana ir veiksmīga - aizveram iestatījumu lapu
+        if (success) {
+            lvgl_display_close_settings();
+        }
+        // Ja neveiksmīga - nekas nenotiek, lapa paliek atvērta
+    }, LV_EVENT_CLICKED, NULL);
+    
     // Title
     lv_obj_t * title = lv_label_create(header);
-    lv_label_set_text(title, "Iestatijumi");
+    lv_label_set_text(title, "Settings");
     lv_obj_set_style_text_color(title, SETTINGS_TEXT_COLOR, 0);
     lv_obj_set_style_text_font(title, &lv_font_montserrat_16, 0);
-    lv_obj_set_pos(title, 70, 12);
+    lv_obj_align(title, LV_ALIGN_CENTER, 0, -5);
     
     // Target Temperature label
     lv_obj_t * temp_label = lv_label_create(settings_container);
@@ -694,7 +718,7 @@ void settings_screen_create(void)
     
     // Servo angle label
     lv_obj_t * servo_angle_label = lv_label_create(settings_container);
-    lv_label_set_text(servo_angle_label, "Servo lenkis:");
+    lv_label_set_text(servo_angle_label, "Servo angle:");
     lv_obj_set_pos(servo_angle_label, 10, 280);
     lv_obj_set_style_text_color(servo_angle_label, SETTINGS_TEXT_COLOR, 0);
     
@@ -732,7 +756,7 @@ void settings_screen_create(void)
     
     // Servo step interval label
     lv_obj_t * servo_step_label = lv_label_create(settings_container);
-    lv_label_set_text(servo_step_label, "Servo atrums:");
+    lv_label_set_text(servo_step_label, "Servo speed:");
     lv_obj_set_pos(servo_step_label, 10, 320);
     lv_obj_set_style_text_color(servo_step_label, SETTINGS_TEXT_COLOR, 0);
     
@@ -770,7 +794,7 @@ void settings_screen_create(void)
     
     // Brīdinājuma temperatūras slieksnis - label
     lv_obj_t * warning_temp_label = lv_label_create(settings_container);
-    lv_label_set_text(warning_temp_label, "Brid. temp.:");
+    lv_label_set_text(warning_temp_label, "Alarm temp:");
     lv_obj_set_pos(warning_temp_label, 10, 360);
     lv_obj_set_style_text_color(warning_temp_label, SETTINGS_TEXT_COLOR, 0);
     
@@ -806,6 +830,8 @@ void settings_screen_create(void)
     
     // Pievienojam event callback
     lv_obj_add_event_cb(warning_temp_roller, warning_temp_roller_event_handler, LV_EVENT_VALUE_CHANGED, NULL);
+    
+    // Pogas jau ir izvietotas augšējā header daļā
     
     roller_initialized = true;
 }

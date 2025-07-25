@@ -355,37 +355,41 @@ void process_touch() {
 // JAUNS: Brīdinājuma popup mainīgie
 static lv_obj_t *warning_popup = NULL;
 static bool warning_popup_visible = false;
+static bool buzzer_muted = false; // Mainīgais, lai sekotu klusuma režīmam
 
-// JAUNS: Funkcija brīdinājuma popup aizvēršanai
+// Šī funkcija vairs nav nepieciešama, jo OK pogas nav un 
+// brīdinājums aizveras automātiski, kad temperatūra normalizējas
+// Tomēr atstājam to (bet neizmantojam), lai saglabātu koda struktūru
 static void warning_popup_close_event_handler(lv_event_t * e) {
-    lv_event_code_t code = lv_event_get_code(e);
-    if (code == LV_EVENT_CLICKED) {
-        if (warning_popup) {
-            // Apstādinam buzera skaņu
-            stopBuzzerSound();
-            
-            // Dzēšam popup
-            lv_obj_del(warning_popup);
-            warning_popup = NULL;
-            warning_popup_visible = false;
-        }
-    }
+    // Tukša funkcija - vairs netiek izmantota
 }
 
-// JAUNS: Funkcija brīdinājuma popup parādīšanai
+// JAUNS: Funkcija brīdinājuma popup parādīšanai (bez OK pogas, automātiski aizveras)
 void lvgl_display_show_warning(const char* title, const char* message) {
-    // Atskaņojam brīdinājuma signālu
-    playWarningSound();
+    // Atskaņojam brīdinājuma signālu, ja nav ieslēgts klusuma režīms
+    if (!buzzer_muted) {
+        playWarningSound();
+    }
     
-    // Ja jau ir atvērts popup, izdzēšam to
+    // Ja jau ir atvērts popup, nav nepieciešams to dzēst
     if (warning_popup) {
-        lv_obj_del(warning_popup);
-        warning_popup = NULL;
+        // Jau ir aktīvs brīdinājums - atjaunojam tikai tekstu, ja nepieciešams
+        lv_obj_t * message_label = lv_obj_get_child(warning_popup, 1); // Otrais bērns ir ziņojuma etiķete
+        if (message_label) {
+            lv_label_set_text(message_label, message);
+        }
+        
+        // Ja nav ieslēgts klusums, atskaņojam brīdinājuma signālu, jo tas var būt cits brīdinājums
+        if (!buzzer_muted) {
+            playWarningSound();
+        }
+        
+        return; // Izejam, jo brīdinājums jau tiek rādīts
     }
     
     // Izveidojam jaunu popup
     warning_popup = lv_obj_create(lv_scr_act());
-    lv_obj_set_size(warning_popup, 300, 200); // Palielinām platumu un augstumu
+    lv_obj_set_size(warning_popup, 300, 180); // Mazliet mazāks augstums, jo nav pogas
     lv_obj_center(warning_popup);
     lv_obj_set_style_bg_color(warning_popup, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_radius(warning_popup, 15, 0);
@@ -408,20 +412,47 @@ void lvgl_display_show_warning(const char* title, const char* message) {
     // Iestatām maksimālo platumu, lai teksts automātiski ietītos
     lv_obj_set_width(message_label, 260);
     lv_label_set_long_mode(message_label, LV_LABEL_LONG_WRAP);
-    // Pārvietojam tekstu nedaudz augstāk, lai būtu vairāk vietas pogai
-    lv_obj_align(message_label, LV_ALIGN_CENTER, 0, -10);
+    // Centrējam ziņojumu
+    lv_obj_align(message_label, LV_ALIGN_CENTER, 0, 10);
     
-    // Aizvēršanas poga
-    lv_obj_t * close_btn = lv_btn_create(warning_popup);
-    lv_obj_set_size(close_btn, 120, 45); // Palielinām pogu
-    lv_obj_align(close_btn, LV_ALIGN_BOTTOM_MID, 0, -5); // Pārvietojam vairāk uz leju
-    lv_obj_set_style_bg_color(close_btn, lv_color_hex(0x1E88E5), 0);
-    lv_obj_add_event_cb(close_btn, warning_popup_close_event_handler, LV_EVENT_CLICKED, NULL);
+    // Pievienojam automātiskas izslēgšanās norādi
+    lv_obj_t * auto_close_label = lv_label_create(warning_popup);
+    lv_label_set_text(auto_close_label, "Pazudīs automātiski kad temp. normalizēsies");
+    lv_obj_set_style_text_font(auto_close_label, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(auto_close_label, lv_color_hex(0x888888), 0);
+    lv_obj_align(auto_close_label, LV_ALIGN_BOTTOM_MID, 0, -10);
     
-    lv_obj_t * close_label = lv_label_create(close_btn);
-    lv_label_set_text(close_label, "OK");
-    lv_obj_set_style_text_font(close_label, &lv_font_montserrat_18, 0); // Palielinām pogas tekstu
-    lv_obj_center(close_label);
+    // Pievienojam klusuma (mute) pogu
+    lv_obj_t * mute_btn = lv_btn_create(warning_popup);
+    lv_obj_set_size(mute_btn, 40, 40);
+    lv_obj_align(mute_btn, LV_ALIGN_TOP_RIGHT, -10, 10);
+    lv_obj_set_style_radius(mute_btn, 20, 0); // Apaļa poga
+    
+    // Mute pogas ikona (simbols)
+    lv_obj_t * mute_label = lv_label_create(mute_btn);
+    lv_label_set_text(mute_label, buzzer_muted ? LV_SYMBOL_MUTE : LV_SYMBOL_VOLUME_MAX);
+    lv_obj_center(mute_label);
+    
+    // Pievienojam event handleri
+    lv_obj_add_event_cb(mute_btn, [](lv_event_t * e) {
+        if (lv_event_get_code(e) == LV_EVENT_CLICKED) {
+            buzzer_muted = !buzzer_muted;
+            
+            // Atjaunojam pogas ikonu
+            lv_obj_t * btn = lv_event_get_target(e);
+            lv_obj_t * label = lv_obj_get_child(btn, 0);
+            if (label) {
+                lv_label_set_text(label, buzzer_muted ? LV_SYMBOL_MUTE : LV_SYMBOL_VOLUME_MAX);
+            }
+            
+            // Izslēdzam vai ieslēdzam skaņu
+            if (buzzer_muted) {
+                stopBuzzerSound();
+            } else {
+                playWarningSound();
+            }
+        }
+    }, LV_EVENT_CLICKED, NULL);
     
     warning_popup_visible = true;
 }
@@ -446,16 +477,40 @@ void lvgl_display_touch_update() {
 void lvgl_display_update_bars() {
    // JAUNS: Pārbaudam vai temperatura ir kritiska
    static bool warning_shown = false;
+   static bool high_temp_warning = false; // Vai brīdinājums ir par augstu temperatūru
+   static bool low_temp_warning = false;  // Vai brīdinājums ir par zemu temperatūru
+   
    if (temperature > warningTemperature && !warning_shown) {
+       // Ja temperatūra ir par augstu un brīdinājums vēl nav parādīts
        static char warning_message[40];
        snprintf(warning_message, sizeof(warning_message), "Temp. parsniedz %d!", warningTemperature);
        lvgl_display_show_warning("Bridinajums!", warning_message);
        warning_shown = true;
+       high_temp_warning = true;
+       low_temp_warning = false;
    } else if (temperature <= 3 && !warning_shown) {
+       // Sensora kļūda un brīdinājums vēl nav parādīts
        lvgl_display_show_warning("Bridinajums!", "Sensor error!");
        warning_shown = true;
-   } else if (temperature <= warningTemperature && temperature > 3) {
+       high_temp_warning = false;
+       low_temp_warning = true;
+   } else if ((high_temp_warning && temperature <= warningTemperature) || 
+              (low_temp_warning && temperature > 3)) {
+       // Temperatūra ir normalizējusies - notīram brīdinājumu
+       // - Ja bija augstās temperatūras brīdinājums un temperatura nokrita zem sliekšņa
+       // - VAI ja bija zemas temperatūras brīdinājums un temperatura paaugstinājās virs 3°C
        warning_shown = false;
+       high_temp_warning = false;
+       low_temp_warning = false;
+       
+       // Ja ir aktīvs brīdinājums, aizveram to
+       if (warning_popup) {
+           stopBuzzerSound(); // Apstādinām skaņu
+           lv_obj_del(warning_popup);
+           warning_popup = NULL;
+           warning_popup_visible = false;
+           buzzer_muted = false; // Atiestatām klusuma statusu, lai nākamreiz atkal skanētu
+       }
    }
    
    lv_bar_set_range(blue_bar, 0, targetTempC*1.22);

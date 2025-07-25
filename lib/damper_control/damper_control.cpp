@@ -51,9 +51,15 @@ float errOld = 0;
 // Asinhronās servo kustības mainīgie
 static int targetDamper = 0;
 static int currentDamper = 0;
-static bool servoMoving = false;
+bool servoMoving = false;
 static TickType_t lastMoveTime = 0;
 int servoStepInterval = 50;  // Servo kustības solis milisekundēs (var mainīt no iestatījumiem)
+
+// Zemas temperatūras pārbaudes mainīgie
+static unsigned long lowTempStartTime = 0;
+static bool lowTempCheckActive = false;
+static int initialTemperature = 0; // Sākotnējā temperatūra, kad sākas pārbaude
+static const unsigned long LOW_TEMP_TIMEOUT = 240000; // 4 minūtes (4*60*1000 ms)
 
 int buzzer = 14;
 
@@ -157,17 +163,58 @@ void damperControlLoop() {
             errI = 0;
         }
         
-        // Aprēķinām jauno damper vērtību izmantojot PID algoritmu
-        damper = kP * errP + kI * errI + kD * errD;
+        // Uzlabota kontroles loģika ar precīziem nosacījumiem:
+        // - Ja temperatūra ir vienāda vai lielāka par mērķi (targetTempC), damper = 0 (pilnībā aizvērts)
+        // - Ja temperatūra ir mazāka par minimālo (temperatureMin), damper = 0 (pilnībā aizvērts)
+        // - PID aprēķins tiek veikts TIKAI diapazonā: temperatureMin < temperature < targetTempC
         
-        // Ierobežojam vērtību noteiktajā diapazonā
-        damper = constrain(damper, minDamper, maxDamper);
+        if (temperature >= targetTempC) {
+            // Temperatūra ir virs vai vienāda ar mērķi - pilnībā aizveram damper
+            damper = minDamper; // 0%
+            messageDamp = "AUTO-MAX"; // Statuss, kas norāda, ka sasniegta max temperatūra
+            // Ja temperatūra ir virs mērķa, atceļam zemas temp pārbaudi
+            lowTempCheckActive = false;
+        } 
+        else if (temperature <= temperatureMin) {
+            // Temperatūra ir zem vai vienāda ar minimālo - pilnībā atveram damper
+            damper = maxDamper; // 100%
+            
+            
+            // Aktivizējam 4 minūšu pārbaudi, ja tā vēl nav aktīva
+            if (!lowTempCheckActive) {
+                lowTempStartTime = millis();
+                initialTemperature = temperature; // Saglabājam sākotnējo temperatūru
+                lowTempCheckActive = true;
+            } 
+            // Ja ir pagājušas 4 minūtes un temperatūra NAV palielinājusies
+            else if (millis() - lowTempStartTime > LOW_TEMP_TIMEOUT && temperature <= initialTemperature) {
+                damper = minDamper; // Iestatām damper uz aizvērtu pozīciju
+                messageDamp = "END!";
+                display_manager_notify_damper_changed();
+                
+                // Gaidām līdz servo beidz kustību
+                if (!servoMoving) {
+                    delay(500); // Ļaujam lietotājam redzēt ziņojumu
+                    ieietDeepSleepArTouch(); // Aizejam dziļajā miegā
+                }
+            }
+        } 
+        else {
+            // Temperatūra ir OPTIMĀLAJĀ diapazonā (starp min un mērķi)
+            // Ja temperatūra ir normalizējusies, atceļam zemas temp pārbaudi
+            lowTempCheckActive = false;
+            // Šeit aprēķinam optimālo damper vērtību ar PID algoritmu
+            damper = kP * errP + kI * errI + kD * errD;
+            
+            // Ierobežojam vērtību noteiktajā diapazonā
+            damper = constrain(damper, minDamper, maxDamper);
+            messageDamp = "AUTO"; // Normāls automātiskais režīms
+        }
         
-        // Statusa ziņojuma atjaunināšana
+        // Papildu statusa ziņojuma atjaunināšana, ja nepieciešams papildināt malku
+        // Šis pārraksta iepriekš iestatītos statusus, ja integrālā kļūda ir pārāk liela
         if (errI > refillTrigger) { 
             messageDamp = "FILL!";
-        } else {
-            messageDamp = "AUTO";
         }
     } else {
         // Sistēma ir beigusi darboties (sasniegta maksimālā integrālā kļūda)

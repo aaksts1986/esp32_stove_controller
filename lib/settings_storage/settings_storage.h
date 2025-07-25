@@ -1,0 +1,16 @@
+#pragma once
+#include <Arduino.h>
+#include <Preferences.h>
+
+// Iestatījumu saglabāšanas/ielādes funkcijas
+void initSettingsStorage();
+bool saveAllSettings();
+bool loadAllSettings();
+
+// Individual setting save/load functions
+bool saveTemperatureSettings();
+bool saveDamperSettings();
+bool saveControlSettings();
+
+// Debug helper
+void printCurrentSettings();

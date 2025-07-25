@@ -29,6 +29,11 @@ extern float kD;  // PID diferenciālā koeficients
 extern float endTrigger;
 extern float refillTrigger;
 extern String messageDamp;
+extern bool servoMoving;
+extern float errP;
+extern float errI;
+extern float errD;
+extern float errOld;
 
 // Servo parametri
 extern int servoAngle;  // Servo motora maksimālais leņķis

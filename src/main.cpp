@@ -9,6 +9,8 @@
 #include "wifi1.h" 
 #include "display_manager.h"
 #include <WiFi.h>  
+#include "settings_storage.h" // Iestatījumu saglabāšanas bibliotēka
+#include "telnet.h" // Telnet servera bibliotēka
 
 
 
@@ -19,6 +21,9 @@ int relay = 17;
 void setup() {
     Serial.begin(115200);
     Serial.println("Sistēmas inicializācija.v..");
+    
+    // Inicializējam iestatījumu saglabāšanas sistēmu un ielādējam iepriekšējos iestatījumus
+    initSettingsStorage();
     
     touchButtonInit(2, TOUCH_THRESHOLD, TOUCH_DEBOUNCE_MS);
     delay(500); // Pagaidām, lai nodrošinātu, ka sensori ir gatavi
@@ -37,6 +42,12 @@ void setup() {
     delay(2000); // Pagaidām, lai nodrošinātu, ka sensori ir gatavi
     Serial.print("Mana IP adrese: ");
     Serial.println(WiFi.localIP());
+    
+    // Inicializējam Telnet serveri
+    Telnet.begin(23);
+    Serial.print("Telnet serveris aktīvs uz ");
+    Serial.print(WiFi.localIP());
+    Serial.println(":23");
     
     // Display update intervals configuration (EVENT-DRIVEN MODE):
     // display_manager_set_update_intervals(temp_ms, damper_ms, time_ms, touch_ms)
@@ -68,6 +79,7 @@ void loop() {
     // Core system functions
     lv_timer_handler();
     ota_loop();
+    Telnet.handle(); // Apstrādā Telnet savienojumus
     handleTelegramMessages(); // Apstrādā Telegram ziņojumus
     //lvgl_display_update_target_temp();
     // Sensor updates
