@@ -9,6 +9,11 @@ void settings_screen_show(void);
 void settings_screen_hide(void);
 bool settings_screen_is_visible(void);
 
+// Globālie mainīgie ekrāna iestatījumiem
+extern uint8_t screenBrightness;   // Ekrāna spilgtums (0-255)
+extern uint32_t timeUpdateIntervalMs;  // Laika atjaunināšanas intervāls (ms)
+extern uint32_t touchUpdateIntervalMs;  // Skārienjutības atjaunināšanas intervāls (ms)
+
 // Animation settings
 #define SETTINGS_ANIM_TIME_MS 100  // Animācijas ilgumsb
 #define SETTINGS_SLIDE_DISTANCE 320  // Cik pikseļi slide (displeja platums)

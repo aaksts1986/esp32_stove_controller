@@ -1,435 +1,84 @@
 #include "settings_screen.h"
 #include "lvgl_display.h"
+#include "settings_storage.h"
 #include "temperature.h"
 #include "damper_control.h"
-#include "settings_storage.h"
+#include "display_config.h"
+#include "display_manager.h"
+
+
+// External variables
+extern int targetTempC;
+extern int maxTemp;
+extern int temperatureMin;
+extern int warningTemperature;
+
+// Globālie mainīgie ekrāna iestatījumiem - pieejami arī ārpus šī faila
+uint32_t timeUpdateIntervalMs = TIME_UPDATE_INTERVAL_MS;  // Noklusējuma vērtība no display_config.h
+uint32_t touchUpdateIntervalMs = TOUCH_UPDATE_INTERVAL_MS;  // Noklusējuma vērtība no display_config.h
+// Ekrāna spilgtums - globāli pieejams, lai to varētu izmantot lvgl_display.cpp
+uint8_t screenBrightness = 255;  // Maksimālais spilgtums pēc noklusējuma (0-255)
 
 // Global objects
 static lv_obj_t * settings_screen = NULL;
-static lv_obj_t * settings_container = NULL;
 static bool is_visible = false;
-static lv_obj_t * temp_roller = NULL;
-static lv_obj_t * kp_roller = NULL;
-static lv_obj_t * min_temp_roller = NULL;
-static lv_obj_t * max_temp_roller = NULL;
-static lv_obj_t * end_trigger_roller = NULL;
-static lv_obj_t * servo_angle_roller = NULL;
-static lv_obj_t * servo_step_roller = NULL;
-static lv_obj_t * warning_temp_roller = NULL; // Jauns: brīdinājuma temperatūras rolleris
-static bool roller_initialized = false;
+static lv_obj_t * tab_view = NULL;
+static lv_obj_t * tab_temp = NULL;
+static lv_obj_t * tab_damper = NULL;
+static lv_obj_t * tab_servo = NULL;
+static lv_obj_t * tab_display = NULL;
+static lv_obj_t * tab_alarm = NULL;
+static lv_obj_t * tab_system = NULL;
 
-// Temperature mapping arrays
-static const int temp_values[] = {64, 66, 68, 70, 72, 74, 76, 78, 80};
-static const int temp_count = 9;
-
-// Brīdinājuma temperatūras vērtības
-static const int warning_temp_values[] = {81, 83, 85, 87, 90};
-static const int warning_temp_count = 5;
-
-// kP mapping array
-static const int kp_values[] = {5, 10, 15, 20, 25, 30, 35, 40, 45};
-static const int kp_count = 9;
-
-// Min temperature mapping array
-static const int min_temp_values[] = {40, 45, 50, 55, 60, 65};
-static const int min_temp_count = 6;
-
-// Max temperature mapping array
-static const int max_temp_values[] = {80, 85, 90, 95, 100, 105, 110};
-static const int max_temp_count = 7;
-
-// End trigger mapping array
-static const int end_trigger_values[] = {5000, 7500, 10000, 12500, 15000, 17500, 20000};
-static const int end_trigger_count = 7;
-
-// Servo angle mapping array
-static const int servo_angle_values[] = {25, 30, 35, 40, 45, 50};
-static const int servo_angle_count = 6;
-
-// Servo step interval mapping array (ms)
-static const int servo_step_values[] = {20, 30, 50, 75, 100};
-static const int servo_step_count = 5;
-
-// Atrod temperature indeksu array
-static int get_temp_index(int temperature)
+// Helper function to create standardized sliders
+static lv_obj_t* create_settings_slider(lv_obj_t* parent, int x, int y, int min_val, int max_val, int current_val)
 {
-    for (int i = 0; i < temp_count; i++) {
-        if (temp_values[i] == temperature) {
-            return i;
-        }
-    }
-    // Ja nav atrasts, atgriez tuvāko
-    if (temperature < 64) return 0;
-    if (temperature > 80) return 8;
-    
-    // Atrod tuvāko
-    for (int i = 0; i < temp_count - 1; i++) {
-        if (temperature >= temp_values[i] && temperature < temp_values[i + 1]) {
-            return i;
-        }
-    }
-    return 4; // Default 70°C
+    lv_obj_t * slider = lv_slider_create(parent);
+    lv_obj_set_width(slider, 120);
+    lv_obj_set_height(slider, 20);
+    lv_obj_align(slider, LV_ALIGN_TOP_LEFT, x, y);
+    lv_slider_set_range(slider, min_val, max_val);
+    lv_slider_set_value(slider, current_val, LV_ANIM_OFF);
+    lv_obj_set_style_bg_color(slider, lv_color_hex(0x0088FF), LV_PART_INDICATOR);
+    return slider;
 }
 
-// Atrod kP indeksu array
-static int get_kp_index(int kp_value)
+// Generic slider event handler
+static void generic_slider_event_handler(lv_event_t * e, void(*update_function)(int), const char* format)
 {
-    for (int i = 0; i < kp_count; i++) {
-        if (kp_values[i] == kp_value) {
-            return i;
+    lv_obj_t * slider = lv_event_get_target(e);
+    int value = lv_slider_get_value(slider);
+    
+    // Call the update function to set the global variable
+    if (update_function) {
+        update_function(value);
+    }
+    
+    // Update the display label
+    lv_obj_t * label = (lv_obj_t*)lv_event_get_user_data(e);
+    if (label && format) {
+        lv_label_set_text_fmt(label, format, value);
+    }
+}
+
+// Update functions for global variables
+static void update_temperatureMin(int value) { temperatureMin = value; }
+static void update_servoAngle(int value) { servoAngle = value; }
+static void update_servoOffset(int value) { servoOffset = value; }
+static void update_servoStepInterval(int value) { servoStepInterval = value; }
+static void update_warningTemperature(int value) { warningTemperature = value; }
+
+// Helper function to update slider and label values in settings_screen_show()
+static void update_slider_value(lv_obj_t* tab, int slider_index, int value, const char* format)
+{
+    lv_obj_t * slider = lv_obj_get_child(tab, slider_index);
+    if (slider) {
+        lv_slider_set_value(slider, value, LV_ANIM_OFF);
+        
+        lv_obj_t * label = lv_obj_get_child(tab, slider_index + 1);
+        if (label && format) {
+            lv_label_set_text_fmt(label, format, value);
         }
-    }
-    // Ja nav atrasts, atgriez tuvāko
-    if (kp_value < 5) return 0;
-    if (kp_value > 45) return 8;
-    
-    // Atrod tuvāko
-    for (int i = 0; i < kp_count - 1; i++) {
-        if (kp_value >= kp_values[i] && kp_value < kp_values[i + 1]) {
-            return i;
-        }
-    }
-    return 2; // Default 15
-}
-
-// Atrod min temperaturas indeksu array
-static int get_min_temp_index(int min_temp)
-{
-    for (int i = 0; i < min_temp_count; i++) {
-        if (min_temp_values[i] == min_temp) {
-            return i;
-        }
-    }
-    // Ja nav atrasts, atgriez tuvāko
-    if (min_temp < 40) return 0;
-    if (min_temp > 65) return min_temp_count - 1;
-    
-    // Atrod tuvāko
-    for (int i = 0; i < min_temp_count - 1; i++) {
-        if (min_temp >= min_temp_values[i] && min_temp < min_temp_values[i + 1]) {
-            return i;
-        }
-    }
-    return 2; // Default 50°C
-}
-
-// Atrod max temperaturas indeksu array
-static int get_max_temp_index(int max_temp)
-{
-    for (int i = 0; i < max_temp_count; i++) {
-        if (max_temp_values[i] == max_temp) {
-            return i;
-        }
-    }
-    // Ja nav atrasts, atgriez tuvāko
-    if (max_temp < 80) return 0;
-    if (max_temp > 110) return max_temp_count - 1;
-    
-    // Atrod tuvāko
-    for (int i = 0; i < max_temp_count - 1; i++) {
-        if (max_temp >= max_temp_values[i] && max_temp < max_temp_values[i + 1]) {
-            return i;
-        }
-    }
-    return 2; // Default 90°C
-}
-
-// Atrod end trigger indeksu array
-static int get_end_trigger_index(float trigger)
-{
-    for (int i = 0; i < end_trigger_count; i++) {
-        if (end_trigger_values[i] == (int)trigger) {
-            return i;
-        }
-    }
-    // Ja nav atrasts, atgriez tuvāko
-    if (trigger < 5000) return 0;
-    if (trigger > 20000) return end_trigger_count - 1;
-    
-    // Atrod tuvāko
-    for (int i = 0; i < end_trigger_count - 1; i++) {
-        if (trigger >= end_trigger_values[i] && trigger < end_trigger_values[i + 1]) {
-            return i;
-        }
-    }
-    return 2; // Default 10000
-}
-
-// Atrod servo angle indeksu array
-static int get_servo_angle_index(int angle)
-{
-    for (int i = 0; i < servo_angle_count; i++) {
-        if (servo_angle_values[i] == angle) {
-            return i;
-        }
-    }
-    // Ja nav atrasts, atgriez tuvāko
-    if (angle < 25) return 0;
-    if (angle > 50) return servo_angle_count - 1;
-    
-    // Atrod tuvāko
-    for (int i = 0; i < servo_angle_count - 1; i++) {
-        if (angle >= servo_angle_values[i] && angle < servo_angle_values[i + 1]) {
-            return i;
-        }
-    }
-    return 2; // Default 35
-}
-
-// Atrod servo step interval indeksu array
-static int get_servo_step_index(int step)
-{
-    for (int i = 0; i < servo_step_count; i++) {
-        if (servo_step_values[i] == step) {
-            return i;
-        }
-    }
-    // Ja nav atrasts, atgriez tuvāko
-    if (step < 20) return 0;
-    if (step > 100) return servo_step_count - 1;
-    
-    // Atrod tuvāko
-    for (int i = 0; i < servo_step_count - 1; i++) {
-        if (step >= servo_step_values[i] && step < servo_step_values[i + 1]) {
-            return i;
-        }
-    }
-    return 2; // Default 50ms
-}
-
-// Atrod brīdinājuma temperatūras indeksu array
-static int get_warning_temp_index(int temp)
-{
-    for (int i = 0; i < warning_temp_count; i++) {
-        if (warning_temp_values[i] == temp) {
-            return i;
-        }
-    }
-    // Ja nav atrasts, atgriez tuvāko
-    if (temp < 81) return 0;
-    if (temp > 90) return warning_temp_count - 1;
-    
-    // Atrod tuvāko
-    for (int i = 0; i < warning_temp_count - 1; i++) {
-        if (temp >= warning_temp_values[i] && temp < warning_temp_values[i + 1]) {
-            return i;
-        }
-    }
-    return 2; // Default 85
-}
-
-// Roller event handler
-static void temp_roller_event_handler(lv_event_t * e)
-{
-    if (lv_event_get_code(e) != LV_EVENT_VALUE_CHANGED) {
-        return;
-    }
-    
-    lv_obj_t * roller = lv_event_get_target(e);
-    if (roller != temp_roller) {
-        return;
-    }
-    
-    uint16_t selected = lv_roller_get_selected(roller);
-    
-    // Validē indeksu
-    if (selected >= temp_count) {
-        return;
-    }
-    
-    int old_temp = targetTempC;
-    int new_temp = temp_values[selected];
-    
-    targetTempC = new_temp;
-    lvgl_display_update_target_temp();
-}
-
-// kP roller event handler
-static void kp_roller_event_handler(lv_event_t * e)
-{
-    if (lv_event_get_code(e) != LV_EVENT_VALUE_CHANGED) {
-        return;
-    }
-    
-    lv_obj_t * roller = lv_event_get_target(e);
-    if (roller != kp_roller) {
-        return;
-    }
-    
-    uint16_t selected = lv_roller_get_selected(roller);
-    
-    // Validē indeksu
-    if (selected >= kp_count) {
-        return;
-    }
-    
-    int old_kp = kP;
-    int new_kp = kp_values[selected];
-    
-    kP = new_kp;
-    
-    // Atjaunojam atkarīgos parametrus
-    kI = kP / tauI;
-    kD = kP / tauD;
-}
-
-// Min temperature roller event handler
-static void min_temp_roller_event_handler(lv_event_t * e)
-{
-    if (lv_event_get_code(e) != LV_EVENT_VALUE_CHANGED) {
-        return;
-    }
-    
-    lv_obj_t * roller = lv_event_get_target(e);
-    if (roller != min_temp_roller) {
-        return;
-    }
-    
-    uint16_t selected = lv_roller_get_selected(roller);
-    
-    // Validē indeksu
-    if (selected >= min_temp_count) {
-        return;
-    }
-    
-    int old_temp = temperatureMin;
-    int new_temp = min_temp_values[selected];
-    
-    temperatureMin = new_temp;
-}
-
-// Max temperature roller event handler
-static void max_temp_roller_event_handler(lv_event_t * e)
-{
-    if (lv_event_get_code(e) != LV_EVENT_VALUE_CHANGED) {
-        return;
-    }
-    
-    lv_obj_t * roller = lv_event_get_target(e);
-    if (roller != max_temp_roller) {
-        return;
-    }
-    
-    uint16_t selected = lv_roller_get_selected(roller);
-    
-    // Validē indeksu
-    if (selected >= max_temp_count) {
-        return;
-    }
-    
-    int old_temp = maxTemp;
-    int new_temp = max_temp_values[selected];
-    
-    maxTemp = new_temp;
-}
-
-// End trigger roller event handler
-static void end_trigger_roller_event_handler(lv_event_t * e)
-{
-    if (lv_event_get_code(e) != LV_EVENT_VALUE_CHANGED) {
-        return;
-    }
-    
-    lv_obj_t * roller = lv_event_get_target(e);
-    if (roller != end_trigger_roller) {
-        return;
-    }
-    
-    uint16_t selected = lv_roller_get_selected(roller);
-    
-    // Validē indeksu
-    if (selected >= end_trigger_count) {
-        return;
-    }
-    
-    float old_trigger = endTrigger;
-    float new_trigger = end_trigger_values[selected];
-    
-    endTrigger = new_trigger;
-}
-
-// Servo angle roller event handler
-static void servo_angle_roller_event_handler(lv_event_t * e)
-{
-    if (lv_event_get_code(e) != LV_EVENT_VALUE_CHANGED) {
-        return;
-    }
-    
-    lv_obj_t * roller = lv_event_get_target(e);
-    if (roller != servo_angle_roller) {
-        return;
-    }
-    
-    uint16_t selected = lv_roller_get_selected(roller);
-    
-    // Validē indeksu
-    if (selected >= servo_angle_count) {
-        return;
-    }
-    
-    int old_angle = servoAngle;
-    int new_angle = servo_angle_values[selected];
-    
-    servoAngle = new_angle;
-}
-
-// Servo step interval roller event handler
-static void servo_step_roller_event_handler(lv_event_t * e)
-{
-    if (lv_event_get_code(e) != LV_EVENT_VALUE_CHANGED) {
-        return;
-    }
-    
-    lv_obj_t * roller = lv_event_get_target(e);
-    if (roller != servo_step_roller) {
-        return;
-    }
-    
-    uint16_t selected = lv_roller_get_selected(roller);
-    
-    // Validē indeksu
-    if (selected >= servo_step_count) {
-        return;
-    }
-    
-    int old_step = servoStepInterval;
-    int new_step = servo_step_values[selected];
-    
-    servoStepInterval = new_step;
-}
-
-// Brīdinājuma temperatūras roller event handler
-static void warning_temp_roller_event_handler(lv_event_t * e)
-{
-    if (lv_event_get_code(e) != LV_EVENT_VALUE_CHANGED) {
-        return;
-    }
-    
-    lv_obj_t * roller = lv_event_get_target(e);
-    if (roller != warning_temp_roller) {
-        return;
-    }
-    
-    uint16_t selected = lv_roller_get_selected(roller);
-    
-    // Validē indeksu
-    if (selected >= warning_temp_count) {
-        return;
-    }
-    
-    int new_temp = warning_temp_values[selected];
-    
-    // Atjaunojam mainīgo temperatūras modulī
-    extern int warningTemperature;
-    warningTemperature = new_temp;
-}
-
-// Animation callback for hiding screen
-static void hide_animation_ready_cb(lv_anim_t * a)
-{
-    if (settings_screen) {
-        lv_obj_add_flag(settings_screen, LV_OBJ_FLAG_HIDDEN);
-        is_visible = false;
     }
 }
 
@@ -440,521 +89,422 @@ void settings_screen_create(void)
         return;
     }
     
-    // Izveidojam pilnekrāna konteineru
+    // Main screen
     settings_screen = lv_obj_create(lv_scr_act());
-    if (!settings_screen) {
-        return;
-    }
-    
     lv_obj_set_size(settings_screen, LV_HOR_RES, LV_VER_RES);
-    lv_obj_clear_flag(settings_screen, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_pos(settings_screen, 0, 0);
-    lv_obj_set_style_bg_color(settings_screen, SETTINGS_BG_COLOR, 0);
-    lv_obj_set_style_border_width(settings_screen, 0, 0);
-    lv_obj_set_style_pad_all(settings_screen, 0, 0);
     lv_obj_add_flag(settings_screen, LV_OBJ_FLAG_HIDDEN);
     
-    // Galvenais konteiners
-    settings_container = lv_obj_create(settings_screen);
-    if (!settings_container) {
-        return;
-    }
-    
-    lv_obj_set_size(settings_container, LV_HOR_RES - 20, LV_VER_RES - 20);
-    lv_obj_center(settings_container);
-    lv_obj_set_style_bg_color(settings_container, SETTINGS_CARD_COLOR, 0);
-    lv_obj_set_style_border_width(settings_container, 0, 0);
-    lv_obj_set_style_radius(settings_container, 12, 0);
-    lv_obj_set_style_shadow_width(settings_container, 10, 0);
-    lv_obj_set_style_shadow_opa(settings_container, LV_OPA_10, 0);
-    lv_obj_set_style_pad_all(settings_container, 20, 0);
-    
-    // Header
-    lv_obj_t * header = lv_obj_create(settings_container);
-    lv_obj_set_size(header, LV_PCT(100), 50);
-    lv_obj_set_pos(header, 0, 0);
-    lv_obj_set_style_bg_opa(header, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(header, 0, 0);
-    lv_obj_set_style_pad_all(header, 0, 0);
-    
-    // Back button - kreisajā pusē
-    lv_obj_t * back_btn = lv_btn_create(header);
-    lv_obj_set_size(back_btn, 80, 30);
-    lv_obj_set_pos(back_btn, 0, 0);
-    lv_obj_set_style_bg_color(back_btn, SETTINGS_ACCENT_COLOR, 0);
-    lv_obj_set_style_radius(back_btn, 8, 0);
+    // Back button
+    lv_obj_t * back_btn = lv_btn_create(settings_screen);
+    lv_obj_set_size(back_btn, 80, 40);
+    lv_obj_set_pos(back_btn, 20, 20);
     
     lv_obj_t * back_label = lv_label_create(back_btn);
     lv_label_set_text(back_label, "Back");
-    lv_obj_set_style_text_color(back_label, lv_color_white(), 0);
     lv_obj_center(back_label);
     
     lv_obj_add_event_cb(back_btn, [](lv_event_t * e) {
         lvgl_display_close_settings();
     }, LV_EVENT_CLICKED, NULL);
     
-    // Save button - labajā pusē
-    lv_obj_t * save_btn = lv_btn_create(header);
-    lv_obj_set_size(save_btn, 80, 30);
-    lv_obj_set_pos(save_btn, LV_HOR_RES - 20 - 100 - 20, 0); // Labajā pusē (platums - robežas - pogas platums - papildu atstarpe)
-    lv_obj_set_style_bg_color(save_btn, SETTINGS_ACCENT_COLOR, 0);
-    lv_obj_set_style_radius(save_btn, 8, 0);
+    // Save button
+    lv_obj_t * save_btn = lv_btn_create(settings_screen);
+    lv_obj_set_size(save_btn, 80, 40);
+    lv_obj_set_pos(save_btn, LV_HOR_RES - 120, 20);
     
     lv_obj_t * save_label = lv_label_create(save_btn);
     lv_label_set_text(save_label, "Save");
-    lv_obj_set_style_text_color(save_label, lv_color_white(), 0);
     lv_obj_center(save_label);
     
     lv_obj_add_event_cb(save_btn, [](lv_event_t * e) {
-        // Saglabājam visus iestatījumus
         bool success = saveAllSettings();
-        
-        // Ja saglabāšana ir veiksmīga - aizveram iestatījumu lapu
         if (success) {
             lvgl_display_close_settings();
         }
-        // Ja neveiksmīga - nekas nenotiek, lapa paliek atvērta
     }, LV_EVENT_CLICKED, NULL);
     
-    // Title
-    lv_obj_t * title = lv_label_create(header);
-    lv_label_set_text(title, "Settings");
-    lv_obj_set_style_text_color(title, SETTINGS_TEXT_COLOR, 0);
-    lv_obj_set_style_text_font(title, &lv_font_montserrat_16, 0);
-    lv_obj_align(title, LV_ALIGN_CENTER, 0, -5);
+    // Create tabview
+    tab_view = lv_tabview_create(settings_screen, LV_DIR_LEFT, 80);
+    lv_obj_set_size(tab_view, LV_HOR_RES-30 , LV_VER_RES - 100);
+    lv_obj_set_pos(tab_view, 0, 70);
     
-    // Target Temperature label
-    lv_obj_t * temp_label = lv_label_create(settings_container);
-    lv_label_set_text(temp_label, "Target temp:");
-    lv_obj_set_pos(temp_label, 10, 80);
-    lv_obj_set_style_text_color(temp_label, SETTINGS_TEXT_COLOR, 0);
+    // Create tabs with names
+    tab_temp = lv_tabview_add_tab(tab_view, "Temp.");
+    tab_damper = lv_tabview_add_tab(tab_view, "Damper");
+    tab_servo = lv_tabview_add_tab(tab_view, "Servo");
+    tab_display = lv_tabview_add_tab(tab_view, "Display");
+    tab_alarm = lv_tabview_add_tab(tab_view, "Alarm");
+    tab_system = lv_tabview_add_tab(tab_view, "System");
     
-    // Temperature roller
-    temp_roller = lv_roller_create(settings_container);
-    if (!temp_roller) {
-        return;
-    }
+    // --- Temperature Tab Content ---
     
-    // Set roller options
-    lv_roller_set_options(temp_roller, 
-        "64°C\n66°C\n68°C\n70°C\n72°C\n74°C\n76°C\n78°C\n80°C", 
-        LV_ROLLER_MODE_NORMAL);
+    // Target temperature slider
+    lv_obj_t * target_temp_label = lv_label_create(tab_temp);
+    lv_label_set_text(target_temp_label, "Target Temp");
+    lv_obj_align(target_temp_label, LV_ALIGN_TOP_LEFT, 10, 10);
     
-    // Position and style roller
-    lv_obj_set_pos(temp_roller, 140, 70);
-    lv_obj_set_size(temp_roller, 60, 40);  // Mazāks augstums
-    lv_roller_set_visible_row_count(temp_roller, 1);  // Tikai 1 rinda
-    lv_obj_set_style_text_font(temp_roller, &lv_font_montserrat_18, LV_PART_SELECTED | LV_STATE_DEFAULT);
-
-    // Style the roller
-    lv_obj_set_style_bg_color(temp_roller, lv_color_white(), 0);
-    lv_obj_set_style_border_width(temp_roller, 1, 0);
-    lv_obj_set_style_bg_opa(temp_roller, 0, LV_PART_SELECTED | LV_STATE_DEFAULT);
-    lv_obj_set_style_text_color(temp_roller, lv_color_hex(0xff000000), LV_PART_SELECTED | LV_STATE_DEFAULT);
-    lv_obj_set_style_radius(temp_roller, 8, 0);
+    // Nodrošinām, ka targetTempC ir atbilstošā diapazonā un ievēro 2 grādu soli
+    if (targetTempC < 62) targetTempC = 62;
+    if (targetTempC > 80) targetTempC = 80;
+    targetTempC = ((targetTempC + 1) / 2) * 2; // Noapaļojam uz tuvāko pāra skaitli
     
-    // Set initial value BEFORE adding event callback
-    int current_index = get_temp_index(targetTempC);
+    lv_obj_t * target_temp_slider = create_settings_slider(tab_temp, 10, 40, 62, 80, targetTempC);
+    lv_slider_set_mode(target_temp_slider, LV_SLIDER_MODE_NORMAL);  // Step mode
     
-    lv_roller_set_selected(temp_roller, current_index, LV_ANIM_OFF);
+    // Iestatām 2 grādu soli, kad slaidera kustība ir pabeigta
+    lv_obj_add_event_cb(target_temp_slider, [](lv_event_t * e) {
+        lv_obj_t * slider = lv_event_get_target(e);
+        int32_t value = lv_slider_get_value(slider);
+        // Noapaļojam uz tuvāko pāra skaitli
+        value = ((value + 1) / 2) * 2;
+        lv_slider_set_value(slider, value, LV_ANIM_OFF);
+        // Svarīgi: atjauninām globālo mainīgo
+        targetTempC = value;
+        // Arī jāatjaunina visi citi elementi, kas izmanto šo vērtību
+        // (šī funkcija tiek izsaukta, kad lietotājs atlaiž slaideri)
+    }, LV_EVENT_RELEASED, NULL);
     
-    // Verify the set value
-    uint16_t actual_index = lv_roller_get_selected(temp_roller);
+    lv_obj_t * target_temp_value = lv_label_create(tab_temp);
+    lv_label_set_text_fmt(target_temp_value, "%d°C", targetTempC);
+    // Pozicionē vērtību tieši blakus slaidera beigām (80px garums + 10px sākums + 5px atstarpe)
+    lv_obj_align(target_temp_value, LV_ALIGN_TOP_LEFT, 140, 40);
     
-    // NOW add event callback
-    lv_obj_add_event_cb(temp_roller, temp_roller_event_handler, LV_EVENT_VALUE_CHANGED, NULL);
-    
-    // Min Temp label
-    lv_obj_t * min_temp_label = lv_label_create(settings_container);
-    lv_label_set_text(min_temp_label, "Min temp:");
-    lv_obj_set_pos(min_temp_label, 10, 120);
-    lv_obj_set_style_text_color(min_temp_label, SETTINGS_TEXT_COLOR, 0);
-    
-    // Min Temp roller
-    min_temp_roller = lv_roller_create(settings_container);
-    if (!min_temp_roller) {
-        return;
-    }
-    
-    // Set roller options
-    lv_roller_set_options(min_temp_roller, 
-        "40°C\n45°C\n50°C\n55°C\n60°C\n65°C", 
-        LV_ROLLER_MODE_NORMAL);
-    
-    // Position and style roller
-    lv_obj_set_pos(min_temp_roller, 140, 110);
-    lv_obj_set_size(min_temp_roller, 60, 40);
-    lv_roller_set_visible_row_count(min_temp_roller, 1);
-    lv_obj_set_style_text_font(min_temp_roller, &lv_font_montserrat_18, LV_PART_SELECTED | LV_STATE_DEFAULT);
-
-    // Style the roller - same style as temp roller
-    lv_obj_set_style_bg_color(min_temp_roller, lv_color_white(), 0);
-    lv_obj_set_style_border_width(min_temp_roller, 1, 0);
-    lv_obj_set_style_bg_opa(min_temp_roller, 0, LV_PART_SELECTED | LV_STATE_DEFAULT);
-    lv_obj_set_style_text_color(min_temp_roller, lv_color_hex(0xff000000), LV_PART_SELECTED | LV_STATE_DEFAULT);
-    lv_obj_set_style_radius(min_temp_roller, 8, 0);
-    
-    // Set initial value
-    int min_temp_index = get_min_temp_index(temperatureMin);
-    
-    lv_roller_set_selected(min_temp_roller, min_temp_index, LV_ANIM_OFF);
-    
-    // Add event callback
-    lv_obj_add_event_cb(min_temp_roller, min_temp_roller_event_handler, LV_EVENT_VALUE_CHANGED, NULL);
-    
-    // Max Temp label
-    lv_obj_t * max_temp_label = lv_label_create(settings_container);
-    lv_label_set_text(max_temp_label, "Max temp:");
-    lv_obj_set_pos(max_temp_label, 10, 160);
-    lv_obj_set_style_text_color(max_temp_label, SETTINGS_TEXT_COLOR, 0);
-    
-    // Max Temp roller
-    max_temp_roller = lv_roller_create(settings_container);
-    if (!max_temp_roller) {
-        return;
-    }
-    
-    // Set roller options
-    lv_roller_set_options(max_temp_roller, 
-        "80°C\n85°C\n90°C\n95°C\n100°C\n105°C\n110°C", 
-        LV_ROLLER_MODE_NORMAL);
-    
-    // Position and style roller
-    lv_obj_set_pos(max_temp_roller, 140, 150);
-    lv_obj_set_size(max_temp_roller, 60, 40);
-    lv_roller_set_visible_row_count(max_temp_roller, 1);
-    lv_obj_set_style_text_font(max_temp_roller, &lv_font_montserrat_18, LV_PART_SELECTED | LV_STATE_DEFAULT);
-
-    // Style the roller - same style as temp roller
-    lv_obj_set_style_bg_color(max_temp_roller, lv_color_white(), 0);
-    lv_obj_set_style_border_width(max_temp_roller, 1, 0);
-    lv_obj_set_style_bg_opa(max_temp_roller, 0, LV_PART_SELECTED | LV_STATE_DEFAULT);
-    lv_obj_set_style_text_color(max_temp_roller, lv_color_hex(0xff000000), LV_PART_SELECTED | LV_STATE_DEFAULT);
-    lv_obj_set_style_radius(max_temp_roller, 8, 0);
-    
-    // Set initial value
-    int max_temp_index = get_max_temp_index(maxTemp);
-    
-    lv_roller_set_selected(max_temp_roller, max_temp_index, LV_ANIM_OFF);
-    
-    // Add event callback
-    lv_obj_add_event_cb(max_temp_roller, max_temp_roller_event_handler, LV_EVENT_VALUE_CHANGED, NULL);
-    
-    // kP label
-    lv_obj_t * kp_label = lv_label_create(settings_container);
-    lv_label_set_text(kp_label, "kP vertiba:");
-    lv_obj_set_pos(kp_label, 10, 200);
-    lv_obj_set_style_text_color(kp_label, SETTINGS_TEXT_COLOR, 0);
-    
-    // kP roller
-    kp_roller = lv_roller_create(settings_container);
-    if (!kp_roller) {
-        return;
-    }
-    
-    // Set roller options
-    lv_roller_set_options(kp_roller, 
-        "5\n10\n15\n20\n25\n30\n35\n40\n45", 
-        LV_ROLLER_MODE_NORMAL);
-    
-    // Position and style roller
-    lv_obj_set_pos(kp_roller, 140, 190);
-    lv_obj_set_size(kp_roller, 60, 40);
-    lv_roller_set_visible_row_count(kp_roller, 1);
-    lv_obj_set_style_text_font(kp_roller, &lv_font_montserrat_18, LV_PART_SELECTED | LV_STATE_DEFAULT);
-
-    // Style the roller - same style as temp roller
-    lv_obj_set_style_bg_color(kp_roller, lv_color_white(), 0);
-    lv_obj_set_style_border_width(kp_roller, 1, 0);
-    lv_obj_set_style_bg_opa(kp_roller, 0, LV_PART_SELECTED | LV_STATE_DEFAULT);
-    lv_obj_set_style_text_color(kp_roller, lv_color_hex(0xff000000), LV_PART_SELECTED | LV_STATE_DEFAULT);
-    lv_obj_set_style_radius(kp_roller, 8, 0);
-    
-    // Set initial value
-    int kp_index = get_kp_index(kP);
-    
-    lv_roller_set_selected(kp_roller, kp_index, LV_ANIM_OFF);
-    
-    // Add event callback
-    lv_obj_add_event_cb(kp_roller, kp_roller_event_handler, LV_EVENT_VALUE_CHANGED, NULL);
-    
-    // End trigger label
-    lv_obj_t * end_trigger_label = lv_label_create(settings_container);
-    lv_label_set_text(end_trigger_label, "End trigger:");
-    lv_obj_set_pos(end_trigger_label, 10, 240);
-    lv_obj_set_style_text_color(end_trigger_label, SETTINGS_TEXT_COLOR, 0);
-    
-    // End trigger roller
-    end_trigger_roller = lv_roller_create(settings_container);
-    if (!end_trigger_roller) {
-        return;
-    }
-    
-    // Set roller options
-    lv_roller_set_options(end_trigger_roller, 
-        "5000\n7500\n10000\n12500\n15000\n17500\n20000", 
-        LV_ROLLER_MODE_NORMAL);
-    
-    // Position and style roller
-    lv_obj_set_pos(end_trigger_roller, 140, 230);
-    lv_obj_set_size(end_trigger_roller, 80, 40);
-    lv_roller_set_visible_row_count(end_trigger_roller, 1);
-    lv_obj_set_style_text_font(end_trigger_roller, &lv_font_montserrat_18, LV_PART_SELECTED | LV_STATE_DEFAULT);
-
-    // Style the roller - same style as other rollers
-    lv_obj_set_style_bg_color(end_trigger_roller, lv_color_white(), 0);
-    lv_obj_set_style_border_width(end_trigger_roller, 1, 0);
-    lv_obj_set_style_bg_opa(end_trigger_roller, 0, LV_PART_SELECTED | LV_STATE_DEFAULT);
-    lv_obj_set_style_text_color(end_trigger_roller, lv_color_hex(0xff000000), LV_PART_SELECTED | LV_STATE_DEFAULT);
-    lv_obj_set_style_radius(end_trigger_roller, 8, 0);
-    
-    // Set initial value
-    int end_trigger_index = get_end_trigger_index(endTrigger);
-    
-    lv_roller_set_selected(end_trigger_roller, end_trigger_index, LV_ANIM_OFF);
-    
-    // Add event callback
-    lv_obj_add_event_cb(end_trigger_roller, end_trigger_roller_event_handler, LV_EVENT_VALUE_CHANGED, NULL);
-    
-    // Servo angle label
-    lv_obj_t * servo_angle_label = lv_label_create(settings_container);
-    lv_label_set_text(servo_angle_label, "Servo angle:");
-    lv_obj_set_pos(servo_angle_label, 10, 280);
-    lv_obj_set_style_text_color(servo_angle_label, SETTINGS_TEXT_COLOR, 0);
-    
-    // Servo angle roller
-    servo_angle_roller = lv_roller_create(settings_container);
-    if (!servo_angle_roller) {
-        return;
-    }
-    
-    // Set roller options
-    lv_roller_set_options(servo_angle_roller, 
-        "25°\n30°\n35°\n40°\n45°\n50°", 
-        LV_ROLLER_MODE_NORMAL);
-    
-    // Position and style roller
-    lv_obj_set_pos(servo_angle_roller, 140, 270);
-    lv_obj_set_size(servo_angle_roller, 60, 40);
-    lv_roller_set_visible_row_count(servo_angle_roller, 1);
-    lv_obj_set_style_text_font(servo_angle_roller, &lv_font_montserrat_18, LV_PART_SELECTED | LV_STATE_DEFAULT);
-
-    // Style the roller - same style as other rollers
-    lv_obj_set_style_bg_color(servo_angle_roller, lv_color_white(), 0);
-    lv_obj_set_style_border_width(servo_angle_roller, 1, 0);
-    lv_obj_set_style_bg_opa(servo_angle_roller, 0, LV_PART_SELECTED | LV_STATE_DEFAULT);
-    lv_obj_set_style_text_color(servo_angle_roller, lv_color_hex(0xff000000), LV_PART_SELECTED | LV_STATE_DEFAULT);
-    lv_obj_set_style_radius(servo_angle_roller, 8, 0);
-    
-    // Set initial value
-    int servo_angle_index = get_servo_angle_index(servoAngle);
-    
-    lv_roller_set_selected(servo_angle_roller, servo_angle_index, LV_ANIM_OFF);
-    
-    // Add event callback
-    lv_obj_add_event_cb(servo_angle_roller, servo_angle_roller_event_handler, LV_EVENT_VALUE_CHANGED, NULL);
-    
-    // Servo step interval label
-    lv_obj_t * servo_step_label = lv_label_create(settings_container);
-    lv_label_set_text(servo_step_label, "Servo speed:");
-    lv_obj_set_pos(servo_step_label, 10, 320);
-    lv_obj_set_style_text_color(servo_step_label, SETTINGS_TEXT_COLOR, 0);
-    
-    // Servo step interval roller
-    servo_step_roller = lv_roller_create(settings_container);
-    if (!servo_step_roller) {
-        return;
-    }
-    
-    // Set roller options
-    lv_roller_set_options(servo_step_roller, 
-        "20ms\n30ms\n50ms\n75ms\n100ms", 
-        LV_ROLLER_MODE_NORMAL);
-    
-    // Position and style roller
-    lv_obj_set_pos(servo_step_roller, 140, 310);
-    lv_obj_set_size(servo_step_roller, 70, 40);
-    lv_roller_set_visible_row_count(servo_step_roller, 1);
-    lv_obj_set_style_text_font(servo_step_roller, &lv_font_montserrat_18, LV_PART_SELECTED | LV_STATE_DEFAULT);
-
-    // Style the roller - same style as other rollers
-    lv_obj_set_style_bg_color(servo_step_roller, lv_color_white(), 0);
-    lv_obj_set_style_border_width(servo_step_roller, 1, 0);
-    lv_obj_set_style_bg_opa(servo_step_roller, 0, LV_PART_SELECTED | LV_STATE_DEFAULT);
-    lv_obj_set_style_text_color(servo_step_roller, lv_color_hex(0xff000000), LV_PART_SELECTED | LV_STATE_DEFAULT);
-    lv_obj_set_style_radius(servo_step_roller, 8, 0);
-    
-    // Set initial value
-    int servo_step_index = get_servo_step_index(servoStepInterval);
-    
-    lv_roller_set_selected(servo_step_roller, servo_step_index, LV_ANIM_OFF);
-    
-    // Add event callback
-    lv_obj_add_event_cb(servo_step_roller, servo_step_roller_event_handler, LV_EVENT_VALUE_CHANGED, NULL);
-    
-    // Brīdinājuma temperatūras slieksnis - label
-    lv_obj_t * warning_temp_label = lv_label_create(settings_container);
-    lv_label_set_text(warning_temp_label, "Alarm temp:");
-    lv_obj_set_pos(warning_temp_label, 10, 360);
-    lv_obj_set_style_text_color(warning_temp_label, SETTINGS_TEXT_COLOR, 0);
-    
-    // Brīdinājuma temperatūras rolleris
-    warning_temp_roller = lv_roller_create(settings_container);
-    if (!warning_temp_roller) {
-        return;
-    }
-    
-    // Set roller options
-    lv_roller_set_options(warning_temp_roller, 
-        "81°C\n83°C\n85°C\n87°C\n90°C", 
-        LV_ROLLER_MODE_NORMAL);
-    
-    // Position and style roller
-    lv_obj_set_pos(warning_temp_roller, 140, 350);
-    lv_obj_set_size(warning_temp_roller, 70, 40);
-    lv_roller_set_visible_row_count(warning_temp_roller, 1);
-    lv_obj_set_style_text_font(warning_temp_roller, &lv_font_montserrat_18, LV_PART_SELECTED | LV_STATE_DEFAULT);
-
-    // Style the roller - same style as other rollers
-    lv_obj_set_style_bg_color(warning_temp_roller, lv_color_white(), 0);
-    lv_obj_set_style_border_width(warning_temp_roller, 1, 0);
-    lv_obj_set_style_bg_opa(warning_temp_roller, 0, LV_PART_SELECTED | LV_STATE_DEFAULT);
-    lv_obj_set_style_text_color(warning_temp_roller, lv_color_hex(0xff000000), LV_PART_SELECTED | LV_STATE_DEFAULT);
-    lv_obj_set_style_radius(warning_temp_roller, 8, 0);
-    
-    // Iestatam sākotnējo vērtību
-    extern int warningTemperature;
-    int warning_temp_index = get_warning_temp_index(warningTemperature);
-    
-    lv_roller_set_selected(warning_temp_roller, warning_temp_index, LV_ANIM_OFF);
-    
-    // Pievienojam event callback
-    lv_obj_add_event_cb(warning_temp_roller, warning_temp_roller_event_handler, LV_EVENT_VALUE_CHANGED, NULL);
-    
-    // Pogas jau ir izvietotas augšējā header daļā
-    
-    roller_initialized = true;
-}
-
-// Update rollers to match current values
-void settings_screen_update_roller(void)
-{
-    if (!roller_initialized) {
-        return;
-    }
-    
-    // Update temperature roller
-    if (temp_roller) {
-        int current_index = get_temp_index(targetTempC);
+    // Apstrādājam vērtības maiņu, kad slaideris tiek vilkts
+    lv_obj_add_event_cb(target_temp_slider, [](lv_event_t * e) {
+        lv_obj_t * slider = lv_event_get_target(e);
+        int value = lv_slider_get_value(slider);
+        // Pielietojam 2 grādu soli
+        value = ((value + 1) / 2) * 2; // Noapaļojam uz tuvāko pāra skaitli
         
-        // Temporarily remove event callback to prevent triggering
-        lv_obj_remove_event_cb(temp_roller, temp_roller_event_handler);
+        // Atjauninām globālo mainīgo - šis ir svarīgi!
+        targetTempC = value;
         
-        // Update roller
-        lv_roller_set_selected(temp_roller, current_index, LV_ANIM_OFF);
+        // Atjauninām slaidera pozīciju
+        lv_slider_set_value(slider, value, LV_ANIM_OFF);
         
-        // Re-add event callback
-        lv_obj_add_event_cb(temp_roller, temp_roller_event_handler, LV_EVENT_VALUE_CHANGED, NULL);
-    }
+        // Atjauninām cipara rādījumu blakus slaiderim
+        lv_obj_t * label = (lv_obj_t*)lv_event_get_user_data(e);
+        lv_label_set_text_fmt(label, "%d°C", value);
+        
+        // SVARĪGI: Sinhronizējam ar galveno ekrānu dzīvajā laikā
+        // Šis ļaus lietotājam redzēt izmaiņas jau slīdināšanas laikā
+        lvgl_display_update_target_temp();
+    }, LV_EVENT_VALUE_CHANGED, target_temp_value);
     
-    // Update kP roller
-    if (kp_roller) {
-        int kp_index = get_kp_index(kP);
-        
-        // Temporarily remove event callback to prevent triggering
-        lv_obj_remove_event_cb(kp_roller, kp_roller_event_handler);
-        
-        // Update roller
-        lv_roller_set_selected(kp_roller, kp_index, LV_ANIM_OFF);
-        
-        // Re-add event callback
-        lv_obj_add_event_cb(kp_roller, kp_roller_event_handler, LV_EVENT_VALUE_CHANGED, NULL);
-    }
+    // Min temperature slider (pārvietojam uz augšu, kur iepriekš bija Max Temp)
+    lv_obj_t * min_temp_label = lv_label_create(tab_temp);
+    lv_label_set_text(min_temp_label, "Min Temp");
+    lv_obj_align(min_temp_label, LV_ALIGN_TOP_LEFT, 10, 80);  // Bija 150, tagad 80
     
-    // Update min temperature roller
-    if (min_temp_roller) {
-        int min_temp_index = get_min_temp_index(temperatureMin);
-        
-        // Temporarily remove event callback to prevent triggering
-        lv_obj_remove_event_cb(min_temp_roller, min_temp_roller_event_handler);
-        
-        // Update roller
-        lv_roller_set_selected(min_temp_roller, min_temp_index, LV_ANIM_OFF);
-        
-        // Re-add event callback
-        lv_obj_add_event_cb(min_temp_roller, min_temp_roller_event_handler, LV_EVENT_VALUE_CHANGED, NULL);
-    }
+    lv_obj_t * min_temp_slider = create_settings_slider(tab_temp, 10, 110, 40, 55, temperatureMin);
     
-    // Update max temperature roller
-    if (max_temp_roller) {
-        int max_temp_index = get_max_temp_index(maxTemp);
-        
-        // Temporarily remove event callback to prevent triggering
-        lv_obj_remove_event_cb(max_temp_roller, max_temp_roller_event_handler);
-        
-        // Update roller
-        lv_roller_set_selected(max_temp_roller, max_temp_index, LV_ANIM_OFF);
-        
-        // Re-add event callback
-        lv_obj_add_event_cb(max_temp_roller, max_temp_roller_event_handler, LV_EVENT_VALUE_CHANGED, NULL);
-    }
+    lv_obj_t * min_temp_value = lv_label_create(tab_temp);
+    lv_label_set_text_fmt(min_temp_value, "%d°C", temperatureMin);
+    // Pozicionē vērtību tieši blakus slaidera beigām
+    lv_obj_align(min_temp_value, LV_ALIGN_TOP_LEFT, 140, 110);  // Bija 180, tagad 110
     
-    // Update end trigger roller
-    if (end_trigger_roller) {
-        int end_trigger_index = get_end_trigger_index(endTrigger);
-        
-        // Temporarily remove event callback to prevent triggering
-        lv_obj_remove_event_cb(end_trigger_roller, end_trigger_roller_event_handler);
-        
-        // Update roller
-        lv_roller_set_selected(end_trigger_roller, end_trigger_index, LV_ANIM_OFF);
-        
-        // Re-add event callback
-        lv_obj_add_event_cb(end_trigger_roller, end_trigger_roller_event_handler, LV_EVENT_VALUE_CHANGED, NULL);
-    }
+    lv_obj_add_event_cb(min_temp_slider, [](lv_event_t * e) {
+        generic_slider_event_handler(e, update_temperatureMin, "%d°C");
+    }, LV_EVENT_VALUE_CHANGED, min_temp_value);
     
-    // Update servo angle roller
-    if (servo_angle_roller) {
-        int servo_angle_index = get_servo_angle_index(servoAngle);
-        
-        // Temporarily remove event callback to prevent triggering
-        lv_obj_remove_event_cb(servo_angle_roller, servo_angle_roller_event_handler);
-        
-        // Update roller
-        lv_roller_set_selected(servo_angle_roller, servo_angle_index, LV_ANIM_OFF);
-        
-        // Re-add event callback
-        lv_obj_add_event_cb(servo_angle_roller, servo_angle_roller_event_handler, LV_EVENT_VALUE_CHANGED, NULL);
-    }
+    // Read interval slider (pārvietojam uz augšu)
+    lv_obj_t * read_interval_label = lv_label_create(tab_temp);
+    lv_label_set_text(read_interval_label, "Read Interval");
+    lv_obj_align(read_interval_label, LV_ALIGN_TOP_LEFT, 10, 150);  // Bija 220, tagad 150
     
-    // Update servo step interval roller
-    if (servo_step_roller) {
-        int servo_step_index = get_servo_step_index(servoStepInterval);
-        
-        // Temporarily remove event callback to prevent triggering
-        lv_obj_remove_event_cb(servo_step_roller, servo_step_roller_event_handler);
-        
-        // Update roller
-        lv_roller_set_selected(servo_step_roller, servo_step_index, LV_ANIM_OFF);
-        
-        // Re-add event callback
-        lv_obj_add_event_cb(servo_step_roller, servo_step_roller_event_handler, LV_EVENT_VALUE_CHANGED, NULL);
-    }
+    // Izmantojam globālo mainīgo tempReadIntervalMs
+    // Pārbaudam, vai tas ir pieņemamajā diapazonā
+    if (tempReadIntervalMs < 2000) tempReadIntervalMs = 2000;
+    if (tempReadIntervalMs > 10000) tempReadIntervalMs = 10000;
+    // Noapaļojam uz tuvāko 2 sekunžu (2000ms) soli
+    tempReadIntervalMs = ((tempReadIntervalMs + 1000) / 2000) * 2000;
     
-    // Update warning temperature roller
-    if (warning_temp_roller) {
-        extern int warningTemperature;
-        int warning_temp_index = get_warning_temp_index(warningTemperature);
+    lv_obj_t * read_interval_slider = create_settings_slider(tab_temp, 10, 180, 2000, 10000, tempReadIntervalMs);
+    
+    lv_obj_t * read_interval_value = lv_label_create(tab_temp);
+    lv_label_set_text_fmt(read_interval_value, "%d.0 s", tempReadIntervalMs/1000);  // Display in seconds
+    // Pozicionē vērtību tieši blakus slaidera beigām
+    lv_obj_align(read_interval_value, LV_ALIGN_TOP_LEFT, 140, 180);  // Bija 250, tagad 180
+    
+    lv_obj_add_event_cb(read_interval_slider, [](lv_event_t * e) {
+        lv_obj_t * slider = lv_event_get_target(e);
+        int value = lv_slider_get_value(slider);
         
-        // Temporarily remove event callback to prevent triggering
-        lv_obj_remove_event_cb(warning_temp_roller, warning_temp_roller_event_handler);
+        // Apply 2-second steps (2000ms steps)
+        value = ((value + 1000) / 2000) * 2000;
+        if (value < 2000) value = 2000;
+        if (value > 10000) value = 10000;
         
-        // Update roller
-        lv_roller_set_selected(warning_temp_roller, warning_temp_index, LV_ANIM_OFF);
+        lv_slider_set_value(slider, value, LV_ANIM_OFF);
         
-        // Re-add event callback
-        lv_obj_add_event_cb(warning_temp_roller, warning_temp_roller_event_handler, LV_EVENT_VALUE_CHANGED, NULL);
-    }
+        // Atjauninām globālo mainīgo un attēloto vērtību
+        tempReadIntervalMs = value;
+        
+        lv_obj_t * label = (lv_obj_t*)lv_event_get_user_data(e);
+        lv_label_set_text_fmt(label, "%d.0 s", value/1000);  // Convert to seconds for display
+    }, LV_EVENT_VALUE_CHANGED, read_interval_value);
+    
+    // --- Damper Tab Content ---
+    
+    // kP slider - PID proporcionalitātes koeficients
+    lv_obj_t * kp_label = lv_label_create(tab_damper);
+    lv_label_set_text(kp_label, "kP Value");
+    lv_obj_align(kp_label, LV_ALIGN_TOP_LEFT, 10, 10);
+    
+    lv_obj_t * kp_slider = create_settings_slider(tab_damper, 10, 40, 1, 100, kP);
+    
+    lv_obj_t * kp_value = lv_label_create(tab_damper);
+    lv_label_set_text_fmt(kp_value, "%d", kP);
+    lv_obj_align(kp_value, LV_ALIGN_TOP_LEFT, 140, 40);
+    
+    lv_obj_add_event_cb(kp_slider, [](lv_event_t * e) {
+        lv_obj_t * slider = lv_event_get_target(e);
+        int value = lv_slider_get_value(slider);
+        kP = value;
+        // Aprēķinam atkarīgās vērtības
+        kI = kP / tauI;
+        kD = kP * tauD;
+        
+        lv_obj_t * label = (lv_obj_t*)lv_event_get_user_data(e);
+        lv_label_set_text_fmt(label, "%d", value);
+    }, LV_EVENT_VALUE_CHANGED, kp_value);
+    
+    // tauD slider - PID atvasināšanas laika konstante
+    lv_obj_t * taud_label = lv_label_create(tab_damper);
+    lv_label_set_text(taud_label, "tauD Value");
+    lv_obj_align(taud_label, LV_ALIGN_TOP_LEFT, 10, 80);
+    
+    lv_obj_t * taud_slider = create_settings_slider(tab_damper, 10, 110, 1, 100, tauD);
+    
+    lv_obj_t * taud_value = lv_label_create(tab_damper);
+    lv_label_set_text_fmt(taud_value, "%d", (int)tauD);
+    lv_obj_align(taud_value, LV_ALIGN_TOP_LEFT, 140, 110);
+    
+    lv_obj_add_event_cb(taud_slider, [](lv_event_t * e) {
+        lv_obj_t * slider = lv_event_get_target(e);
+        int value = lv_slider_get_value(slider);
+        tauD = value;
+        // Aprēķinam atkarīgās vērtības
+        kD = kP * tauD;
+        
+        lv_obj_t * label = (lv_obj_t*)lv_event_get_user_data(e);
+        lv_label_set_text_fmt(label, "%d", value);
+    }, LV_EVENT_VALUE_CHANGED, taud_value);
+    
+    // endTrigger slider - beigu slieksnis
+    lv_obj_t * end_trigger_label = lv_label_create(tab_damper);
+    lv_label_set_text(end_trigger_label, "End Trigger");
+    lv_obj_align(end_trigger_label, LV_ALIGN_TOP_LEFT, 10, 150);
+    
+    lv_obj_t * end_trigger_slider = create_settings_slider(tab_damper, 10, 180, 5000, 30000, endTrigger);
+    
+    lv_obj_t * end_trigger_value = lv_label_create(tab_damper);
+    lv_label_set_text_fmt(end_trigger_value, "%d", (int)endTrigger);
+    lv_obj_align(end_trigger_value, LV_ALIGN_TOP_LEFT, 140, 180);
+    
+    lv_obj_add_event_cb(end_trigger_slider, [](lv_event_t * e) {
+        lv_obj_t * slider = lv_event_get_target(e);
+        int value = lv_slider_get_value(slider);
+        endTrigger = value;
+        
+        lv_obj_t * label = (lv_obj_t*)lv_event_get_user_data(e);
+        lv_label_set_text_fmt(label, "%d", value);
+    }, LV_EVENT_VALUE_CHANGED, end_trigger_value);
+    
+    // LOW_TEMP_TIMEOUT slider - zemas temperatūras taimeris
+    lv_obj_t * low_temp_timeout_label = lv_label_create(tab_damper);
+    lv_label_set_text(low_temp_timeout_label, "Low Temp Timeout");
+    lv_obj_align(low_temp_timeout_label, LV_ALIGN_TOP_LEFT, 10, 220);
+    
+    // Pārbaudam vai LOW_TEMP_TIMEOUT ir pieņemamajā diapazonā
+    if (LOW_TEMP_TIMEOUT < 60000) LOW_TEMP_TIMEOUT = 60000; // Min 1 minūte
+    if (LOW_TEMP_TIMEOUT > 600000) LOW_TEMP_TIMEOUT = 600000; // Max 10 minūtes
+    // Noapaļojam uz tuvāko minūti (60000ms)
+    LOW_TEMP_TIMEOUT = ((LOW_TEMP_TIMEOUT + 30000) / 60000) * 60000;
+    
+    lv_obj_t * low_temp_timeout_slider = create_settings_slider(tab_damper, 10, 250, 60000, 600000, LOW_TEMP_TIMEOUT);
+    
+    lv_obj_t * low_temp_timeout_value = lv_label_create(tab_damper);
+    lv_label_set_text_fmt(low_temp_timeout_value, "%d min", (int)(LOW_TEMP_TIMEOUT/60000));
+    lv_obj_align(low_temp_timeout_value, LV_ALIGN_TOP_LEFT, 140, 250);
+    
+    lv_obj_add_event_cb(low_temp_timeout_slider, [](lv_event_t * e) {
+        lv_obj_t * slider = lv_event_get_target(e);
+        int value = lv_slider_get_value(slider);
+        
+        // Noapaļojam uz tuvāko minūti (60000ms)
+        value = ((value + 30000) / 60000) * 60000;
+        lv_slider_set_value(slider, value, LV_ANIM_OFF);
+        
+        // Atjauninām globālo mainīgo
+        LOW_TEMP_TIMEOUT = value;
+        
+        lv_obj_t * label = (lv_obj_t*)lv_event_get_user_data(e);
+        lv_label_set_text_fmt(label, "%d min", value/60000);
+    }, LV_EVENT_VALUE_CHANGED, low_temp_timeout_value);
+    
+    // --- Servo Tab Content ---
+    
+    // servoAngle slider - Servo motora maksimālais leņķis
+    lv_obj_t * servo_angle_label = lv_label_create(tab_servo);
+    lv_label_set_text(servo_angle_label, "Servo Angle");
+    lv_obj_align(servo_angle_label, LV_ALIGN_TOP_LEFT, 10, 10);
+    
+    lv_obj_t * servo_angle_slider = create_settings_slider(tab_servo, 10, 40, 10, 100, servoAngle);
+    
+    lv_obj_t * servo_angle_value = lv_label_create(tab_servo);
+    lv_label_set_text_fmt(servo_angle_value, "%d°", servoAngle);
+    lv_obj_align(servo_angle_value, LV_ALIGN_TOP_LEFT, 140, 40);
+    
+    lv_obj_add_event_cb(servo_angle_slider, [](lv_event_t * e) {
+        generic_slider_event_handler(e, update_servoAngle, "%d°");
+    }, LV_EVENT_VALUE_CHANGED, servo_angle_value);
+    
+    // servoOffset slider - Servo pozīcijas nobīde
+    lv_obj_t * servo_offset_label = lv_label_create(tab_servo);
+    lv_label_set_text(servo_offset_label, "Servo Offset");
+    lv_obj_align(servo_offset_label, LV_ALIGN_TOP_LEFT, 10, 80);
+    
+    lv_obj_t * servo_offset_slider = create_settings_slider(tab_servo, 10, 110, 0, 90, servoOffset);
+    
+    lv_obj_t * servo_offset_value = lv_label_create(tab_servo);
+    lv_label_set_text_fmt(servo_offset_value, "%d°", servoOffset);
+    lv_obj_align(servo_offset_value, LV_ALIGN_TOP_LEFT, 140, 110);
+    
+    lv_obj_add_event_cb(servo_offset_slider, [](lv_event_t * e) {
+        generic_slider_event_handler(e, update_servoOffset, "%d°");
+    }, LV_EVENT_VALUE_CHANGED, servo_offset_value);
+    
+    // servoStepInterval slider - Servo kustības ātrums
+    lv_obj_t * servo_step_interval_label = lv_label_create(tab_servo);
+    lv_label_set_text(servo_step_interval_label, "Servo Step Interval");
+    lv_obj_align(servo_step_interval_label, LV_ALIGN_TOP_LEFT, 10, 150);
+    
+    lv_obj_t * servo_step_interval_slider = create_settings_slider(tab_servo, 10, 180, 10, 200, servoStepInterval);
+    
+    lv_obj_t * servo_step_interval_value = lv_label_create(tab_servo);
+    lv_label_set_text_fmt(servo_step_interval_value, "%d ms", servoStepInterval);
+    lv_obj_align(servo_step_interval_value, LV_ALIGN_TOP_LEFT, 140, 180);
+    
+    lv_obj_add_event_cb(servo_step_interval_slider, [](lv_event_t * e) {
+        generic_slider_event_handler(e, update_servoStepInterval, "%d ms");
+    }, LV_EVENT_VALUE_CHANGED, servo_step_interval_value);
+    
+    // --- Display Tab Content ---
+    
+    // Ekrāna spilgtuma slaideris (LCD Backlight)
+    lv_obj_t * brightness_label = lv_label_create(tab_display);
+    lv_label_set_text(brightness_label, "display brightness");
+    lv_obj_align(brightness_label, LV_ALIGN_TOP_LEFT, 10, 10);
+    
+    lv_obj_t * brightness_slider = create_settings_slider(tab_display, 10, 40, 20, 255, screenBrightness);
+    
+    lv_obj_t * brightness_value = lv_label_create(tab_display);
+    lv_label_set_text_fmt(brightness_value, "%d%%", (int)(screenBrightness * 100 / 255));
+    lv_obj_align(brightness_value, LV_ALIGN_TOP_LEFT, 140, 40);
+    
+    lv_obj_add_event_cb(brightness_slider, [](lv_event_t * e) {
+        lv_obj_t * slider = lv_event_get_target(e);
+        int value = lv_slider_get_value(slider);
+        
+        // Atjauninām screenBrightness mainīgo
+        screenBrightness = value;
+        
+        // Atjauninām attēloto vērtību procentos
+        lv_obj_t * label = (lv_obj_t*)lv_event_get_user_data(e);
+        lv_label_set_text_fmt(label, "%d%%", (int)(value * 100 / 255));
+        
+        // Atjauninām ekrāna spilgtumu
+        lvgl_display_set_brightness(value);
+    }, LV_EVENT_VALUE_CHANGED, brightness_value);
+    
+    // Laika atjaunināšanas intervāla slaideris (TIME_UPDATE_INTERVAL_MS)
+    lv_obj_t * time_update_label = lv_label_create(tab_display);
+    lv_label_set_text(time_update_label, "Time Update");
+    lv_obj_align(time_update_label, LV_ALIGN_TOP_LEFT, 10, 80);
+    
+    lv_obj_t * time_update_slider = create_settings_slider(tab_display, 10, 110, 10000, 60000, timeUpdateIntervalMs);
+    
+    lv_obj_t * time_update_value = lv_label_create(tab_display);
+    lv_label_set_text_fmt(time_update_value, "%d s", timeUpdateIntervalMs / 1000);
+    lv_obj_align(time_update_value, LV_ALIGN_TOP_LEFT, 140, 110);
+    
+    lv_obj_add_event_cb(time_update_slider, [](lv_event_t * e) {
+        lv_obj_t * slider = lv_event_get_target(e);
+        int value = lv_slider_get_value(slider);
+        
+        // Noapaļojam uz tuvāko 10 sekunžu soli
+        value = ((value + 5000) / 10000) * 10000;
+        lv_slider_set_value(slider, value, LV_ANIM_OFF);
+        
+        // Atjauninām globālo mainīgo un attēloto vērtību
+        timeUpdateIntervalMs = value;
+        
+        // Atjauninām display manager konfigurāciju
+        display_manager_set_update_intervals(
+            DEFAULT_TEMP_UPDATE_INTERVAL,
+            DEFAULT_DAMPER_UPDATE_INTERVAL,
+            timeUpdateIntervalMs,
+            touchUpdateIntervalMs
+        );
+        
+        lv_obj_t * label = (lv_obj_t*)lv_event_get_user_data(e);
+        lv_label_set_text_fmt(label, "%d s", value / 1000);
+    }, LV_EVENT_VALUE_CHANGED, time_update_value);
+    
+    // Skārienekrāna atjaunināšanas intervāla slaideris (TOUCH_UPDATE_INTERVAL_MS)
+    lv_obj_t * touch_update_label = lv_label_create(tab_display);
+    lv_label_set_text(touch_update_label, "touch refresh");
+    lv_obj_align(touch_update_label, LV_ALIGN_TOP_LEFT, 10, 150);
+    
+    lv_obj_t * touch_update_slider = create_settings_slider(tab_display, 10, 180, 20, 100, touchUpdateIntervalMs);
+    
+    lv_obj_t * touch_update_value = lv_label_create(tab_display);
+    lv_label_set_text_fmt(touch_update_value, "%d ms", touchUpdateIntervalMs);
+    lv_obj_align(touch_update_value, LV_ALIGN_TOP_LEFT, 140, 180);
+    
+    lv_obj_add_event_cb(touch_update_slider, [](lv_event_t * e) {
+        lv_obj_t * slider = lv_event_get_target(e);
+        int value = lv_slider_get_value(slider);
+        
+        // Noapaļojam uz tuvāko 5 ms soli
+        value = ((value + 2) / 5) * 5;
+        if (value < 20) value = 20;  // Minimālā vērtība
+        lv_slider_set_value(slider, value, LV_ANIM_OFF);
+        
+        // Atjauninām globālo mainīgo un attēloto vērtību
+        touchUpdateIntervalMs = value;
+        
+        // Atjauninām display manager konfigurāciju
+        display_manager_set_update_intervals(
+            DEFAULT_TEMP_UPDATE_INTERVAL,
+            DEFAULT_DAMPER_UPDATE_INTERVAL,
+            timeUpdateIntervalMs,
+            touchUpdateIntervalMs
+        );
+        
+        lv_obj_t * label = (lv_obj_t*)lv_event_get_user_data(e);
+        lv_label_set_text_fmt(label, "%d ms", value);
+    }, LV_EVENT_VALUE_CHANGED, touch_update_value);
+    
+    // --- Alarm Tab Content ---
+    
+    // Warning temperature slider
+    lv_obj_t * warning_temp_label = lv_label_create(tab_alarm);
+    lv_label_set_text(warning_temp_label, "Warning Temp");
+    lv_obj_align(warning_temp_label, LV_ALIGN_TOP_LEFT, 10, 10);
+    
+    lv_obj_t * warning_temp_slider = create_settings_slider(tab_alarm, 10, 40, 80, 95, warningTemperature);
+    
+    lv_obj_t * warning_temp_value = lv_label_create(tab_alarm);
+    lv_label_set_text_fmt(warning_temp_value, "%d°C", warningTemperature);
+    // Pozicionē vērtību tieši blakus slaidera beigām
+    lv_obj_align(warning_temp_value, LV_ALIGN_TOP_LEFT, 140, 40);
+    
+    lv_obj_add_event_cb(warning_temp_slider, [](lv_event_t * e) {
+        generic_slider_event_handler(e, update_warningTemperature, "%d°C");
+    }, LV_EVENT_VALUE_CHANGED, warning_temp_value);
 }
 
 // Show settings screen
@@ -962,48 +512,145 @@ void settings_screen_show(void)
 {
     if (!settings_screen) {
         settings_screen_create();
-    } else {
-        // Update roller if screen already exists
-        settings_screen_update_roller();
+    }
+    is_visible = true;
+    lv_obj_clear_flag(settings_screen, LV_OBJ_FLAG_HIDDEN);
+    
+    // SVARĪGI: Atjauninām iestatījumu ekrāna vērtības no globālajiem mainīgajiem
+    if (tab_temp) {
+        // Atrodam target temp slaideri un atjauninām tā vērtību
+        lv_obj_t * target_temp_slider = lv_obj_get_child(tab_temp, 1); // Target temp slider (0=label, 1=slider)
+        if (target_temp_slider) {
+            // Pārbaudam, vai targetTempC ir atbilstošā diapazonā un ievēro 2 grādu soli
+            int corrected_value = targetTempC;
+            if (corrected_value < 62) corrected_value = 62;
+            if (corrected_value > 80) corrected_value = 80;
+            corrected_value = ((corrected_value + 1) / 2) * 2; // Noapaļojam uz tuvāko pāra skaitli
+            
+            // Ja vērtība tika koriģēta, atjauninām arī globālo mainīgo
+            if (corrected_value != targetTempC) {
+                Serial.printf("Correcting targetTempC from %d to %d\n", targetTempC, corrected_value);
+                targetTempC = corrected_value;
+                // Ja mainījās vērtība, atjauninām arī galveno ekrānu
+                lvgl_display_update_target_temp();
+            }
+            
+            // Iestatām slaidera vērtību
+            lv_slider_set_value(target_temp_slider, targetTempC, LV_ANIM_OFF);
+            
+            // Atjauninām arī redzamo vērtību
+            lv_obj_t * target_temp_value = lv_obj_get_child(tab_temp, 2); // Target temp value label
+            if (target_temp_value) {
+                lv_label_set_text_fmt(target_temp_value, "%d°C", targetTempC);
+            }
+        }
+        
+        // Pēc maxTemp slaidera izņemšanas, indeksi ir mainījušies
+        // Min temp label = 3, Min temp slider = 4, Min temp value = 5
+        update_slider_value(tab_temp, 4, temperatureMin, "%d°C");
+        
+        // Read interval label = 6, Read interval slider = 7, Read interval value = 8
+        lv_obj_t * read_interval_slider = lv_obj_get_child(tab_temp, 7); // Read interval slider
+        if (read_interval_slider) {
+            // Pārbaudam, vai tempReadIntervalMs ir pieņemamā diapazonā un ievēro 2s soli
+            if (tempReadIntervalMs < 2000) tempReadIntervalMs = 2000;
+            if (tempReadIntervalMs > 10000) tempReadIntervalMs = 10000;
+            tempReadIntervalMs = ((tempReadIntervalMs + 1000) / 2000) * 2000;
+            
+            lv_slider_set_value(read_interval_slider, tempReadIntervalMs, LV_ANIM_OFF);
+            
+            // Atjauninām arī redzamo vērtību
+            lv_obj_t * read_interval_value = lv_obj_get_child(tab_temp, 8); // Read interval value label
+            if (read_interval_value) {
+                lv_label_set_text_fmt(read_interval_value, "%d.0 s", tempReadIntervalMs/1000);
+            }
+        }
     }
     
-    if (settings_screen) {
-        is_visible = true;
-        lv_obj_clear_flag(settings_screen, LV_OBJ_FLAG_HIDDEN);
+    // Atjauninām damper cilnes vērtības
+    if (tab_damper) {
+        // kP slider
+        update_slider_value(tab_damper, 1, kP, "%d");
+        
+        // tauD slider
+        update_slider_value(tab_damper, 4, tauD, "%d");
+        
+        // endTrigger slider
+        update_slider_value(tab_damper, 7, endTrigger, "%d");
+        
+        // LOW_TEMP_TIMEOUT slider
+        lv_obj_t * low_temp_timeout_slider = lv_obj_get_child(tab_damper, 10); // LOW_TEMP_TIMEOUT slider
+        if (low_temp_timeout_slider) {
+            // Pārbaudam vai LOW_TEMP_TIMEOUT ir pieņemamajā diapazonā
+            if (LOW_TEMP_TIMEOUT < 60000) LOW_TEMP_TIMEOUT = 60000; // Min 1 minūte
+            if (LOW_TEMP_TIMEOUT > 600000) LOW_TEMP_TIMEOUT = 600000; // Max 10 minūtes
+            
+            // Noapaļojam uz tuvāko minūti (60000ms)
+            LOW_TEMP_TIMEOUT = ((LOW_TEMP_TIMEOUT + 30000) / 60000) * 60000;
+            
+            lv_slider_set_value(low_temp_timeout_slider, LOW_TEMP_TIMEOUT, LV_ANIM_OFF);
+            
+            lv_obj_t * low_temp_timeout_value = lv_obj_get_child(tab_damper, 11); // LOW_TEMP_TIMEOUT value label
+            if (low_temp_timeout_value) {
+                lv_label_set_text_fmt(low_temp_timeout_value, "%d min", (int)(LOW_TEMP_TIMEOUT/60000));
+            }
+        }
+    }
+    
+    // Atjauninām servo cilnes vērtības
+    if (tab_servo) {
+        // servoAngle slider
+        update_slider_value(tab_servo, 1, servoAngle, "%d°");
+        
+        // servoOffset slider
+        update_slider_value(tab_servo, 4, servoOffset, "%d°");
+        
+        // servoStepInterval slider
+        update_slider_value(tab_servo, 7, servoStepInterval, "%d ms");
+    }
+    
+    // Atjauninām alarm cilnes warningTemperature slaideri
+    if (tab_alarm) {
+        // Warning temp slider
+        update_slider_value(tab_alarm, 1, warningTemperature, "%d°C");
+    }
+    
+    // Atjauninām display cilnes vērtības
+    if (tab_display) {
+        // Ekrāna spilgtuma slaideris
+        lv_obj_t * brightness_slider = lv_obj_get_child(tab_display, 1); // Spilgtuma slaideris
+        if (brightness_slider) {
+            lv_slider_set_value(brightness_slider, screenBrightness, LV_ANIM_OFF); // Izmantojam faktisko vērtību
+            
+            lv_obj_t * brightness_value = lv_obj_get_child(tab_display, 2); // Spilgtuma vērtības apzīmējums
+            if (brightness_value) {
+                lv_label_set_text_fmt(brightness_value, "%d%%", (int)(screenBrightness * 100 / 255)); // Actual percentage
+            }
+        }
+        
+        // Laika atjaunināšanas intervāla slaideris
+        update_slider_value(tab_display, 4, timeUpdateIntervalMs / 1000, "%d s");
+        
+        // Skārienekrāna atjaunināšanas intervāla slaideris
+        update_slider_value(tab_display, 7, touchUpdateIntervalMs, "%d ms");
     }
 }
 
 // Hide settings screen
 void settings_screen_hide(void)
 {
-    if (!settings_screen || !is_visible) return;
-    
-    lv_obj_add_flag(settings_screen, LV_OBJ_FLAG_HIDDEN);
-    is_visible = false;
+    if (settings_screen) {
+        lv_obj_add_flag(settings_screen, LV_OBJ_FLAG_HIDDEN);
+        is_visible = false;
+        
+        // SVARĪGI: Atjauninām galvenā ekrāna target temp rādījumu, kad aizveram iestatījumu ekrānu
+        // Šis nodrošinās, ka galvenā ekrāna vērtība tiek sinhronizēta ar iestatījumu ekrāna vērtību
+        lvgl_display_update_target_temp();
+    }
 }
 
 // Check if settings screen is visible
 bool settings_screen_is_visible(void)
 {
     return is_visible;
-}
-
-// Cleanup function (optional)
-void settings_screen_cleanup(void)
-{
-    if (settings_screen) {
-        lv_obj_del(settings_screen);
-        settings_screen = NULL;
-        settings_container = NULL;
-        temp_roller = NULL;
-        kp_roller = NULL;
-        min_temp_roller = NULL;
-        max_temp_roller = NULL;
-        end_trigger_roller = NULL;
-        servo_angle_roller = NULL;
-        servo_step_roller = NULL;
-        warning_temp_roller = NULL; // Jauns: brīdinājuma temperatūras rolleris
-        roller_initialized = false;
-        is_visible = false;
-    }
 }

@@ -6,6 +6,7 @@
 #include "temperature.h" 
 #include "touch_button.h"
 #include "display_manager.h"
+#include "telnet.h"
 
 // Servo un kontroles mainīgie
 Servo mansServo;
@@ -57,9 +58,9 @@ int servoStepInterval = 50;  // Servo kustības solis milisekundēs (var mainīt
 
 // Zemas temperatūras pārbaudes mainīgie
 static unsigned long lowTempStartTime = 0;
-static bool lowTempCheckActive = false;
+bool lowTempCheckActive = false;
 static int initialTemperature = 0; // Sākotnējā temperatūra, kad sākas pārbaude
-static const unsigned long LOW_TEMP_TIMEOUT = 240000; // 4 minūtes (4*60*1000 ms)
+unsigned long LOW_TEMP_TIMEOUT = 240000; // 4 minūtes (4*60*1000 ms)
 
 int buzzer = 14;
 
@@ -142,6 +143,18 @@ void damperControlLoop() {
     int oldDamperValue = damper;
     String oldMessage = messageDamp;
     
+    // Izvadam pasreizejo temperaturu un minimalo temperaturu ik pec 30 sekundem
+    static unsigned long lastDebugTime = 0;
+    if (millis() - lastDebugTime > 30000) {
+        Telnet.print("DEBUG: Pasreizeja temperatura: ");
+        Telnet.print(temperature);
+        Telnet.print(" C, Minimala temperatura: ");
+        Telnet.print(temperatureMin);
+        Telnet.print(" C, lowTempCheckActive: ");
+        Telnet.println(lowTempCheckActive ? "true" : "false");
+        lastDebugTime = millis();
+    }
+    
     // JAUNS: Pārbaudām vai esam manuālajā režīmā
     if (is_manual_damper_mode()) {
         // Manuālajā režīmā damper vērtība tiek uzstādīta no UI roller,
@@ -149,11 +162,13 @@ void damperControlLoop() {
         messageDamp = "MANUAL";
     } 
     else if (errI < endTrigger) {
-        // PID regulators
-        errP = targetTempC - temperature;
-        errI = errI + errP;
-        errD = errP - errOld;
-        errOld = errP;
+        // PID regulators - TIKAI ja nav zemas temperatūras režīms
+        if (!lowTempCheckActive) {
+            errP = targetTempC - temperature;
+            errI = errI + errP;
+            errD = errP - errOld;
+            errOld = errP;
+        }
         
         // Pārbauda, vai ir pievienota jauna malka
         bool woodAdded = WoodFilled(temperature);
@@ -171,44 +186,83 @@ void damperControlLoop() {
         if (temperature >= targetTempC) {
             // Temperatūra ir virs vai vienāda ar mērķi - pilnībā aizveram damper
             damper = minDamper; // 0%
-            messageDamp = "AUTO-MAX"; // Statuss, kas norāda, ka sasniegta max temperatūra
-            // Ja temperatūra ir virs mērķa, atceļam zemas temp pārbaudi
-            lowTempCheckActive = false;
+            messageDamp = "AUTO"; // Statuss, kas norāda, ka sasniegta max temperatūra
+            // Nepārtraucam zemas temperatūras pārbaudi šeit - tas tiek darīts tikai optimālajā diapazonā
         } 
         else if (temperature <= temperatureMin) {
             // Temperatūra ir zem vai vienāda ar minimālo - pilnībā atveram damper
             damper = maxDamper; // 100%
-            
+            messageDamp = "AUTO";
             
             // Aktivizējam 4 minūšu pārbaudi, ja tā vēl nav aktīva
             if (!lowTempCheckActive) {
                 lowTempStartTime = millis();
                 initialTemperature = temperature; // Saglabājam sākotnējo temperatūru
                 lowTempCheckActive = true;
+                
+                // Sakam jaunu rindu un pievienojam laiku, lai butu redzams, kad tiesi zinojums paradijas
+                Telnet.println("");
+                Telnet.println("*****************************************************************");
+                Telnet.print("AKTIVIZETS [");
+                Telnet.print(millis()/1000);
+                Telnet.println(" s]: Zemas temperaturas parbaudes rezims");
+                Telnet.println("INFO: Zemas temperaturas parbaude sakta. Sakuma temperatura: " + String(temperature) + " C");
+                Telnet.println("INFO: Ja 4 minutu laika temperatura nepaaugstinasies par 3 C, ESP paries deep sleep rezima");
+                Telnet.println("*****************************************************************");
+                
+                // Parbaudam, vai varam ari izvadit uz Telneto portu (diagnostikai)
+                Telnet.println("INFO: Zemas temperaturas parbaude sakta. Sakuma temperatura: " + String(temperature) + " C");
             } 
-            // Ja ir pagājušas 4 minūtes un temperatūra NAV palielinājusies
-            else if (millis() - lowTempStartTime > LOW_TEMP_TIMEOUT && temperature <= initialTemperature) {
+            // Ja ir pagājušas 4 minūtes un temperatūra NAV palielinājusies vismaz par 3 grādiem
+            else if (millis() - lowTempStartTime > LOW_TEMP_TIMEOUT && temperature < (initialTemperature + 3)) {
                 damper = minDamper; // Iestatām damper uz aizvērtu pozīciju
                 messageDamp = "END!";
                 display_manager_notify_damper_changed();
                 
+                // Telnet zinojums par deep sleep sagatavosanu
+                Telnet.println("BRIDINAJUMS: 4 minutes pagajusas, bet temperatura nav paaugstinajusies par 3 C");
+                Telnet.println("Sakotneja temp: " + String(initialTemperature) + " C, Pasreizeja temp: " + String(temperature) + " C");
+                Telnet.println("Gatavojamies pariet deep sleep rezima...");
+                
                 // Gaidām līdz servo beidz kustību
                 if (!servoMoving) {
-                    delay(500); // Ļaujam lietotājam redzēt ziņojumu
+                    // Telnet zinojums par deep sleep pareju
+                    Telnet.println("INFORMACIJA: Servo kustiba pabeigta. Damper pozicija: " + String(currentDamper) + "%");
+                    Telnet.println("BRIDINAJUMS: Temperatura nav pieaugusi pietiekami. Parejam deep sleep rezima pec 0.5s");
+                    delay(1500); // Ļaujam lietotājam redzēt ziņojumu
                     ieietDeepSleepArTouch(); // Aizejam dziļajā miegā
                 }
             }
+            // Ja temperatūra ir paaugstinājusies vismaz par 3 grādiem, atceļam zemas temperatūras pārbaudi
+            else if (temperature >= (initialTemperature + 3)) {
+                // Telnet zinojums par veiksmīgu temperaturas paaugstinasanos
+                Telnet.println("");
+                Telnet.println("*****************************************************************");
+                Telnet.print("ATCELTS [");
+                Telnet.print(millis()/1000);
+                Telnet.println(" s]: Zemas temperaturas parbaudes rezims");
+                Telnet.println("INFORMACIJA: Temperatura veiksmigi paaugstinajusies par 3 C vai vairak!");
+                Telnet.println("Sakotneja temp: " + String(initialTemperature) + " C, Pasreizeja temp: " + String(temperature) + " C");
+                Telnet.println("Zemas temperaturas parbaude atcelta. Krasns darbojas normali.");
+                Telnet.println("*****************************************************************");
+                
+                // Atcelam zemas temperaturas parbaudi
+                lowTempCheckActive = false;
+                
+                // Dublejam zinojumu Telnetaja porta
+                Telnet.println("INFORMACIJA: Temperatura veiksmigi paaugstinajusies. Parbaude atcelta.");
+            }
         } 
         else {
-            // Temperatūra ir OPTIMĀLAJĀ diapazonā (starp min un mērķi)
-            // Ja temperatūra ir normalizējusies, atceļam zemas temp pārbaudi
-            lowTempCheckActive = false;
-            // Šeit aprēķinam optimālo damper vērtību ar PID algoritmu
-            damper = kP * errP + kI * errI + kD * errD;
-            
-            // Ierobežojam vērtību noteiktajā diapazonā
-            damper = constrain(damper, minDamper, maxDamper);
-            messageDamp = "AUTO"; // Normāls automātiskais režīms
+            // PID aprēķins TIKAI ja nav zemas temperatūras režīms
+            if (!lowTempCheckActive) {
+                // Šeit aprēķinam optimālo damper vērtību ar PID algoritmu
+                damper = kP * errP + kI * errI + kD * errD;
+                Telnet.println("Damper apreikina erP: " +String(errI));
+                // Ierobežojam vērtību noteiktajā diapazonā
+                damper = constrain(damper, minDamper, maxDamper);
+                messageDamp = "AUTO"; // Normāls automātiskais režīms
+            }
         }
         
         // Papildu statusa ziņojuma atjaunināšana, ja nepieciešams papildināt malku
@@ -231,8 +285,8 @@ void damperControlLoop() {
                 display_manager_notify_damper_changed();
             }
             
-            delay(500);
-            ieietDeepSleepArTouch();
+            delay(1500);
+            ieietDeepSleepArTouch(); // Aizejam dziļajā miegā
         }
     }
     
@@ -276,6 +330,8 @@ void setDamperTarget(int newTarget) {
 void moveServoToDamper() {
     // Ja ir jauns mērķis un servo nav kustībā, sākam jaunu kustību
     if ((damper != targetDamper) && !servoMoving && (currentDamper != damper)) {
+        // Telnet zinojums par servo kustibas sakumu
+        Telnet.println("INFO: Sakam servo kustibu no " + String(currentDamper) + "% uz " + String(damper) + "% poziciju");
         setDamperTarget(damper);
     }
     
@@ -303,6 +359,9 @@ void moveServoToDamper() {
             servoMoving = false;
             oldDamper = currentDamper;
             display_manager_notify_damper_position_changed();
+            
+            // Telnet zinojums par servo kustibas pabeigsanu
+            Telnet.println("INFO: Servo kustiba pabeigta. Damper pozicija: " + String(currentDamper) + "%");
             
             // Atslēdzam servo, lai taupītu enerģiju
             if (servoAttached) {
@@ -353,4 +412,34 @@ void startDamperControlTask() {
         &buzzerTaskHandle,   // Uzdevuma rokturis
         1                    // Kodola numurs (1 = otrs kodols)
     );
+}
+
+/**
+ * Pārbauda, vai ir pagājušas 4 minūtes ar zemu temperatūru un ieej deep sleep, ja nepieciešams
+ * Šo funkciju izsauc updateTemperature() ik pēc 3 sekundēm
+ */
+void checkLowTempDeepSleep() {
+    // Pārbaudām vai ir aktīvs zemas temperatūras režīms
+    if (lowTempCheckActive) {
+        // Pārbaudām, vai ir pagājušas 4 minūtes un temperatūra nav paaugstinājusies
+        if (millis() - lowTempStartTime > LOW_TEMP_TIMEOUT && 
+            temperature < (initialTemperature + 3) && !servoMoving) {
+            // Telnet ziņojumi pirms deep sleep
+            Telnet.println("");
+            Telnet.println("*****************************************************************");
+            Telnet.print("IZPILDAS [");
+            Telnet.print(millis()/1000);
+            Telnet.println(" s]: Zemas temperaturas parbaudes timeout");
+            Telnet.println("BRIDINAJUMS: 4 minutes pagajusas, bet temperatura nav paaugstinajusies par 3 C");
+            Telnet.println("Sakotneja temp: " + String(initialTemperature) + " C, Pasreizeja temp: " + String(temperature) + " C");
+            Telnet.println("BRIDINAJUMS: Temperatura nav pieaugusi pietiekami. Parejam deep sleep rezima pec 0.5s");
+            Telnet.println("*****************************************************************");
+            
+            // Ļaujam lietotājam redzēt ziņojumu
+            delay(500);
+            
+            // Aizejam dziļajā miegā
+            ieietDeepSleepArTouch();
+        }
+    }
 }

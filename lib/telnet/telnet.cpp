@@ -31,20 +31,18 @@ void TelnetClass::handle() {
                 clients[i].flush();
                 isConnected[i] = true;
                 
-                // Sūtam sveiciena ziņojumu
+                // Sutam sveiciena zinojumu
                 clients[i].println("Savienojums ar ESP32 telnet serveri izveidots.");
-                clients[i].println("Ievadiet 'help' lai redzētu pieejamās komandas.");
+                clients[i].println("Ievadiet 'help' lai redzetu pieejamas komandas.");
                 clients[i].println("----------------------------------------------");
                 break;
             }
-        }
-        
-        // Nav brīvu vietu, noraidam klientu
-        if (i >= MAX_TELNET_CLIENTS) {
-            WiFiClient client = server.available();
-            client.println("Pārāk daudz klientu! Mēģiniet vēlāk.");
-            client.stop();
-        }
+        }            // Nav brivu vietu, noraidam klientu
+            if (i >= MAX_TELNET_CLIENTS) {
+                WiFiClient client = server.available();
+                client.println("Parak daudz klientu! Meginiet velak.");
+                client.stop();
+            }
     }
     
     // Apstrādājam klientu datus
@@ -54,23 +52,23 @@ void TelnetClass::handle() {
             String command = clients[i].readStringUntil('\n');
             command.trim();
             
-            // Apstrādājam komandas
+            // Apstradajam komandas
             if (command == "help") {
-                clients[i].println("Pieejamās komandas:");
-                clients[i].println("  help - Parāda šo palīdzību");
-                clients[i].println("  info - Parāda sistēmas informāciju");
+                clients[i].println("Pieejamas komandas:");
+                clients[i].println("  help - Parada so palidzibu");
+                clients[i].println("  info - Parada sistemas informaciju");
                 clients[i].println("  exit - Aizver savienojumu");
-                clients[i].println("  reset - Restartē ESP32");
+                clients[i].println("  reset - Restarte ESP32");
             } 
             else if (command == "info") {
-                clients[i].println("ESP32 sistēmas informācija:");
+                clients[i].println("ESP32 sistemas informacija:");
                 clients[i].print("  IP adrese: ");
                 clients[i].println(WiFi.localIP());
                 clients[i].print("  MAC adrese: ");
                 clients[i].println(WiFi.macAddress());
                 clients[i].print("  RSSI: ");
                 clients[i].println(WiFi.RSSI());
-                clients[i].print("  Brīvā atmiņa: ");
+                clients[i].print("  Briva atmina: ");
                 clients[i].println(ESP.getFreeHeap());
             }
             else if (command == "exit") {
@@ -78,12 +76,12 @@ void TelnetClass::handle() {
                 clients[i].stop();
             }
             else if (command == "reset") {
-                clients[i].println("Restartējam ESP32...");
+                clients[i].println("Restartejam ESP32...");
                 delay(500);
                 ESP.restart();
             }
             else if (command.length() > 0) {
-                clients[i].print("Nezināma komanda: ");
+                clients[i].print("Nezinama komanda: ");
                 clients[i].println(command);
             }
         }

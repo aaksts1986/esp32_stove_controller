@@ -11,6 +11,7 @@ bool loadAllSettings();
 bool saveTemperatureSettings();
 bool saveDamperSettings();
 bool saveControlSettings();
+bool saveDisplaySettings();
 
 // Debug helper
 void printCurrentSettings();

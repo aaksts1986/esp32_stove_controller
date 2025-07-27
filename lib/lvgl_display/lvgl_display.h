@@ -22,6 +22,7 @@ void cleanup_psram_buffers();
 void lvgl_display_show_touch_point(uint16_t x, uint16_t y, bool show);
 void lvgl_display_show_settings(); // Jauna funkcija, kas atver iestatījumu logu
 void lvgl_display_close_settings(); // Jauna funkcija, kas aizver iestatījumu logu
+void lvgl_display_set_brightness(uint8_t brightness); // Funkcija ekrāna spilgtuma maiņai
 void lvgl_display_show_warning(const char* title, const char* message); // Jauna funkcija brīdinājuma popup rādīšanai
 bool is_manual_damper_mode(); // Jauna funkcija, kas ļauj pārbaudīt vai ir manuālais režīms
 // ...existing code...

@@ -229,6 +229,27 @@ static void toggle_damper_mode(void)
     lv_refr_now(NULL);
 }
 
+// JAUNS: Setup invisible roller style funkcija
+static void setup_invisible_roller_style(lv_obj_t* roller)
+{
+    if (!roller) return;
+    
+    // Galvenā daļa - transparent background, bez border
+    lv_obj_set_style_bg_opa(roller, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_border_width(roller, 0, LV_PART_MAIN);
+    lv_obj_set_style_outline_width(roller, 0, LV_PART_MAIN);
+    lv_obj_set_style_shadow_width(roller, 0, LV_PART_MAIN);
+    lv_obj_set_style_radius(roller, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(roller, 0, LV_PART_MAIN);
+    
+    // Selected teksts
+    lv_obj_set_style_text_font(roller, &lv_font_montserrat_28, LV_PART_SELECTED);
+    lv_obj_set_style_text_color(roller, lv_color_hex(0x7997a3), LV_PART_SELECTED);
+    lv_obj_set_style_bg_opa(roller, LV_OPA_TRANSP, LV_PART_SELECTED);
+    lv_obj_set_style_border_width(roller, 0, LV_PART_SELECTED);
+    lv_obj_set_style_outline_width(roller, 0, LV_PART_SELECTED);
+}
+
 // JAUNS: Atrod temperature indeksu array (main screen)
 static int main_get_temp_index(int temperature)
 {
@@ -522,12 +543,20 @@ void lvgl_display_update_bars() {
    }
 }
 
+// Ārējs mainīgais no settings_screen.cpp
+extern uint8_t screenBrightness;
+
+// Funkcija ekrāna spilgtuma atjaunināšanai
+void lvgl_display_set_brightness(uint8_t brightness) {
+   display.setBrightness(brightness);
+}
+
 void lvgl_display_init() {
    ts.begin();
    ts.setRotation(0);
    display.setSwapBytes(true);
    display.init();
-   display.setBrightness(128);
+   display.setBrightness(screenBrightness); // Izmantojam globālo mainīgo
    display.setRotation(0);
    
    lv_init();
@@ -684,21 +713,8 @@ void lvgl_display_init() {
        lv_roller_set_visible_row_count(main_target_temp_roller, 1);
 
        
-       // JAUNS: Padarām roller "neredzamu" - tikai teksts
-       // Galvenā daļa - transparent background, bez border
-       lv_obj_set_style_bg_opa(main_target_temp_roller, LV_OPA_TRANSP, LV_PART_MAIN);
-       lv_obj_set_style_border_width(main_target_temp_roller, 0, LV_PART_MAIN);
-       lv_obj_set_style_outline_width(main_target_temp_roller, 0, LV_PART_MAIN);
-       lv_obj_set_style_shadow_width(main_target_temp_roller, 0, LV_PART_MAIN);
-       lv_obj_set_style_radius(main_target_temp_roller, 0, LV_PART_MAIN);
-       lv_obj_set_style_pad_all(main_target_temp_roller, 0, LV_PART_MAIN);
-       
-       // Selected teksts - tāds pats kā iepriekšējais target_temp_label
-       lv_obj_set_style_text_font(main_target_temp_roller, &lv_font_montserrat_28, LV_PART_SELECTED);
-       lv_obj_set_style_text_color(main_target_temp_roller, lv_color_hex(0x7997a3), LV_PART_SELECTED);
-       lv_obj_set_style_bg_opa(main_target_temp_roller, LV_OPA_TRANSP, LV_PART_SELECTED);
-       lv_obj_set_style_border_width(main_target_temp_roller, 0, LV_PART_SELECTED);
-       lv_obj_set_style_outline_width(main_target_temp_roller, 0, LV_PART_SELECTED);
+       // JAUNS: Izmantojam kopējo stila funkciju
+       setup_invisible_roller_style(main_target_temp_roller);
 
        
        // Set initial value BEFORE adding event callback
@@ -726,19 +742,8 @@ void lvgl_display_init() {
        // Paslēpjam sākotnēji
        lv_obj_add_flag(damper_roller, LV_OBJ_FLAG_HIDDEN);
        
-       // Tāda pati stila iestatīšana kā main_target_temp_roller
-       lv_obj_set_style_bg_opa(damper_roller, LV_OPA_TRANSP, LV_PART_MAIN);
-       lv_obj_set_style_border_width(damper_roller, 0, LV_PART_MAIN);
-       lv_obj_set_style_outline_width(damper_roller, 0, LV_PART_MAIN);
-       lv_obj_set_style_shadow_width(damper_roller, 0, LV_PART_MAIN);
-       lv_obj_set_style_radius(damper_roller, 0, LV_PART_MAIN);
-       lv_obj_set_style_pad_all(damper_roller, 0, LV_PART_MAIN);
-       
-       lv_obj_set_style_text_font(damper_roller, &lv_font_montserrat_28, LV_PART_SELECTED);
-       lv_obj_set_style_text_color(damper_roller, lv_color_hex(0x7997a3), LV_PART_SELECTED);
-       lv_obj_set_style_bg_opa(damper_roller, LV_OPA_TRANSP, LV_PART_SELECTED);
-       lv_obj_set_style_border_width(damper_roller, 0, LV_PART_SELECTED);
-       lv_obj_set_style_outline_width(damper_roller, 0, LV_PART_SELECTED);
+       // JAUNS: Izmantojam kopējo stila funkciju
+       setup_invisible_roller_style(damper_roller);
        
        // Set initial value to 100%
        lv_roller_set_selected(damper_roller, 0, LV_ANIM_OFF);

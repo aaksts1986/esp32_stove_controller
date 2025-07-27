@@ -12,11 +12,7 @@
 #include "settings_storage.h" // Iestatījumu saglabāšanas bibliotēka
 #include "telnet.h" // Telnet servera bibliotēka
 
-
-
 int relay = 17;
-
-
 
 void setup() {
     Serial.begin(115200);
@@ -26,8 +22,7 @@ void setup() {
     initSettingsStorage();
     
     touchButtonInit(2, TOUCH_THRESHOLD, TOUCH_DEBOUNCE_MS);
-    delay(500); // Pagaidām, lai nodrošinātu, ka sensori ir gatavi
-
+    
     // Initialize display system first (with PSRAM optimization)
     lvgl_display_init();
     display_manager_init(); // Initialize display manager
@@ -39,51 +34,47 @@ void setup() {
     telegram_setup(); // <-- Inicializē Telegram bot
     initTemperatureSensor();
     ota_setup();
-    delay(2000); // Pagaidām, lai nodrošinātu, ka sensori ir gatavi
+
     Serial.print("Mana IP adrese: ");
     Serial.println(WiFi.localIP());
-    
+
     // Inicializējam Telnet serveri
     Telnet.begin(23);
-    Serial.print("Telnet serveris aktīvs uz ");
-    Serial.print(WiFi.localIP());
-    Serial.println(":23");
-    
-    // Display update intervals configuration (EVENT-DRIVEN MODE):
+
+    delay(3000); // Pagaidām, lai nodrošinātu, ka sensori ir gatavi
+
     // display_manager_set_update_intervals(temp_ms, damper_ms, time_ms, touch_ms)
     // temp_ms   = 0ms     - Temperatūra: tikai kad mainās (nav laika limits!)
     // damper_ms = 0ms     - Damper: tikai kad mainās (nav laika limits!)  
     // time_ms   = 30000ms - Laika attēlošana (katras 30 sekundes)
     // touch_ms  = 50ms    - Touch response (20 FPS, labs response)
     // 
-    // PURE EVENT-DRIVEN: Temp un Damper atjaunojas TIKAI kad tiešām mainās!
-    // Nav nevajadzīgu fallback atjauninājumu!
     display_manager_set_update_intervals(0, 0, 30000, 50);
 
     lvgl_display_update_target_temp();
     
-    delay(1000); // Pagaidām, lai nodrošinātu, ka displejs ir gatavs
+    delay(500); // Pagaidām, lai nodrošinātu, ka displejs ir gatavs
     //amperControlInit();
     startDamperControlTask();
 
     // Final time display check (backup if NTP didn't work immediately)
-    Serial.println("Final time display initialization check...");
     show_time_on_display();           // Display time immediately
 
     
-
-
 }
 
 void loop() {
     // Core system functions
-    lv_timer_handler();
-    ota_loop();
     Telnet.handle(); // Apstrādā Telnet savienojumus
+
+    lv_timer_handler();
+
+    ota_loop();
+    
     handleTelegramMessages(); // Apstrādā Telegram ziņojumus
-    //lvgl_display_update_target_temp();
     // Sensor updates
     updateTemperature();
+
     touchButtonHandle();
 
     // All display logic handled by display manager
@@ -91,5 +82,6 @@ void loop() {
 
     // LVGL timing
     lv_tick_inc(5);
+    
     delay(5);
 }

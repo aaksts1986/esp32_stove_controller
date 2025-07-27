@@ -8,6 +8,7 @@ bool WoodFilled(int CurrentTemp);
 void moveServoToDamper();
 void startDamperControlTask();
 void ieietDeepSleepArTouch();
+void checkLowTempDeepSleep();
 
 // Buzzer funkcijas
 void initBuzzer();
@@ -37,8 +38,13 @@ extern float errOld;
 
 // Servo parametri
 extern int servoAngle;  // Servo motora maksimālais leņķis
+extern int servoOffset;  // Servo pozīcijas nobīde
 extern int servoStepInterval;  // Servo kustības solis milisekundēs
 
 // Buzzer pins un statuss
 extern int buzzer;
 extern bool isWarningActive;
+
+// Zemas temperatūras pārbaudes statuss
+extern bool lowTempCheckActive;
+extern unsigned long LOW_TEMP_TIMEOUT;
